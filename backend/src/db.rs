@@ -118,11 +118,19 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
 
 async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
 
+    // Ensure Tears of Steel uses multi-bitrate 4K stream URL
+    let _ = sqlx::query(
+        "UPDATE videos SET stream_url = ?, quality = '1080p / 4K' WHERE id = 'tears-of-steel'"
+    )
+    .bind("https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.mp4/.m3u8")
+    .execute(pool)
+    .await;
+
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM videos")
         .fetch_one(pool)
         .await?;
 
-    if count.0 >= 20 {
+    if count.0 >= 22 {
         return Ok(());
     }
 
@@ -132,12 +140,28 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
 
     let initial_videos = vec![
         (
+            "phantom-flex-4k",
+            "Skate Phantom Flex (Native 4K Ultra HD 2160p)",
+            "Ultra high-speed high frame rate cinematography filmed with the Phantom Flex 4K camera at 1000fps and mastered in full 3840x2160 Ultra HD resolution.",
+            "Sports",
+            "4K Ultra HD",
+            "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8",
+            "https://images.unsplash.com/photo-1564982752979-3f7bc974d29a?w=800&q=80",
+            "https://images.unsplash.com/photo-1520045892732-304bc3ac5d8e?w=1600&q=85",
+            210,
+            0,
+            1, // featured
+            295000,
+            5.0,
+            "4k, ultrahd, sports, skate, highspeed, phantom, cinematic"
+        ),
+        (
             "tears-of-steel",
             "Tears of Steel (1080p / 4K Multi-Bitrate)",
             "Set in a dystopian future, a group of warriors and scientists gather at the Oude Kerk in Amsterdam to stage a desperate attempt to rescue the world from destructive robots.",
             "Sci-Fi",
-            "1080p 60fps",
-            "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+            "1080p / 4K",
+            "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.mp4/.m3u8",
             "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&q=80",
             "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1600&q=85",
             734,

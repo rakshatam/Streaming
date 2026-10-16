@@ -13,6 +13,7 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const [isRegister, setIsRegister] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
+  const [smtpDispatched, setSmtpDispatched] = useState<boolean>(false);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -51,8 +52,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       }
 
       setOtpSent(true);
+      setSmtpDispatched(!!data.smtp_dispatched);
       setDevOtpHint(data.dev_otp_preview);
-      setSuccessMsg(`Security OTP sent to ${email}. Check below for instant preview code.`);
+      if (data.smtp_dispatched) {
+        setSuccessMsg(`Security verification email sent to ${email}! Please check your inbox (and spam/junk folder).`);
+      } else {
+        setSuccessMsg(data.message || `Verification code generated. Configure SMTP in backend/.env to send real emails.`);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -134,6 +140,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     setError(null);
     setSuccessMsg(null);
     setOtpSent(false);
+    setSmtpDispatched(false);
     setDevOtpHint(null);
     setOtpCode('');
   };
@@ -182,16 +189,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           </div>
         )}
 
-        {/* Developer OTP Preview Badge */}
-        {devOtpHint && (
-          <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs flex items-center justify-between">
-            <span className="text-indigo-300 font-semibold flex items-center gap-1.5">
-              <KeyRound className="w-4 h-4" /> OTP Security Code:
-            </span>
-            <span className="px-2.5 py-1 rounded bg-indigo-600/30 text-indigo-200 font-mono font-bold tracking-widest text-sm">
-              {devOtpHint}
-            </span>
-          </div>
+        {/* Real Email Dispatched Banner or Local OTP Preview */}
+        {otpSent && (
+          smtpDispatched ? (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs space-y-1.5">
+              <div className="text-emerald-300 font-semibold flex items-center gap-1.5">
+                <Mail className="w-4 h-4 text-emerald-400" /> Real Email Dispatched Over SMTP
+              </div>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                A verification email was sent to <strong className="text-white">{email}</strong>. Please check your inbox and spam folder.
+              </p>
+            </div>
+          ) : (
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-2">
+              <div className="text-amber-300 font-semibold flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <KeyRound className="w-4 h-4 text-amber-400" /> Local Test Code (SMTP Unconfigured)
+                </span>
+                {devOtpHint && (
+                  <button
+                    type="button"
+                    onClick={() => setOtpCode(devOtpHint)}
+                    className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-mono text-[11px] font-bold tracking-wider transition-colors"
+                    title="Click to auto-fill code"
+                  >
+                    Auto-Fill {devOtpHint}
+                  </button>
+                )}
+              </div>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                No email was received because SMTP is not yet configured in <code className="text-amber-200">backend/.env</code>. To receive live emails in your inbox, set your SMTP credentials in <code className="text-amber-200">backend/.env</code>.
+              </p>
+            </div>
+          )
         )}
 
         {/* Forms */}

@@ -21,6 +21,33 @@ import {
 } from 'lucide-react';
 import { Video } from '../types';
 
+interface QualityLevel {
+  id: number;
+  width: number;
+  height: number;
+  bitrate: number;
+  label: string;
+}
+
+function formatQualityLabel(width?: number, height?: number): string {
+  const w = width || 0;
+  const h = height || 0;
+
+  // 4K Ultra HD: 3840x2160, or cinematic widescreen 3360x1500 / 3840x1600
+  if (w >= 3360 || h >= 1440) return '4K Ultra HD';
+  // 2K QHD: 2560x1440, or cinematic widescreen 2576x1150 / 2560x1080
+  if (w >= 2560 || h >= 1080) return '2K QHD (1440p)';
+  // 1080p Full HD: 1920x1080, or widescreen 1920x800 / 1680x750 / 1728x720
+  if (w >= 1680 || h >= 750 || (h >= 720 && w >= 1280)) {
+    if (w >= 1680 || h >= 800 || h === 750) return '1080p Full HD';
+    return '720p HD';
+  }
+  if (h >= 480) return '480p SD';
+  if (h >= 360) return '360p';
+  if (h > 0) return `${h}p`;
+  return '1080p Full HD';
+}
+
 interface VideoPlayerModalProps {
   video: Video | null;
   onClose: () => void;
@@ -52,9 +79,9 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   const [interactionToast, setInteractionToast] = useState<string | null>(null);
 
   // Stream Quality Ladder
-  const [qualities, setQualities] = useState<{ id: number; height: number; bitrate: number }[]>([]);
+  const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedQuality, setSelectedQuality] = useState<number>(-1); // -1 = Auto
-  const [currentQualityLabel, setCurrentQualityLabel] = useState<string>('Auto (1080p)');
+  const [currentQualityLabel, setCurrentQualityLabel] = useState<string>('Auto (1080p / 4K)');
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
 
   // Diagnostics HUD Telemetry
@@ -183,10 +210,12 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       hls.attachMedia(videoEl);
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-        const levels = data.levels.map((lvl, index) => ({
+        const levels: QualityLevel[] = data.levels.map((lvl, index) => ({
           id: index,
+          width: lvl.width || 0,
           height: lvl.height || 1080,
           bitrate: lvl.bitrate || 0,
+          label: formatQualityLabel(lvl.width, lvl.height),
         }));
         setQualities(levels);
         videoEl.play().catch(() => {
@@ -200,10 +229,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
         const lvl = hls.levels[data.level];
         if (lvl) {
-          setCurrentQualityLabel(`${lvl.height}p`);
+          const label = formatQualityLabel(lvl.width, lvl.height);
+          setCurrentQualityLabel(label);
           setHudStats((prev) => ({
             ...prev,
-            resolution: `${lvl.width || 1920}x${lvl.height || 1080}`,
+            resolution: `${lvl.width || 1920}x${lvl.height || 1080} (${label})`,
             bandwidth: Math.round(lvl.bitrate / 1000),
           }));
         }
@@ -314,10 +344,10 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     hlsRef.current.currentLevel = levelIndex;
     setSelectedQuality(levelIndex);
     if (levelIndex === -1) {
-      setCurrentQualityLabel('Auto (1080p)');
+      setCurrentQualityLabel('Auto (Adaptive HD/4K)');
     } else {
       const lvl = qualities.find((q) => q.id === levelIndex);
-      if (lvl) setCurrentQualityLabel(`${lvl.height}p`);
+      if (lvl) setCurrentQualityLabel(lvl.label);
     }
     setShowSettings(false);
   };
@@ -630,7 +660,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
                           selectedQuality === -1 ? 'bg-red-600 text-white font-bold' : 'text-slate-300 hover:bg-white/10'
                         }`}
                       >
-                        <span>Auto (Adaptive 1080p)</span>
+                        <span>Auto (Adaptive HD/4K)</span>
                         {selectedQuality === -1 && <Check className="w-3.5 h-3.5" />}
                       </button>
                       {qualities.map((q) => (
@@ -641,7 +671,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
                             selectedQuality === q.id ? 'bg-red-600 text-white font-bold' : 'text-slate-300 hover:bg-white/10'
                           }`}
                         >
-                          <span>{q.height}p HD</span>
+                          <span>{q.label}</span>
                           {selectedQuality === q.id && <Check className="w-3.5 h-3.5" />}
                         </button>
                       ))}

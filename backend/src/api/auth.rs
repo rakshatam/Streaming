@@ -45,6 +45,7 @@ pub struct OtpSentResponse {
     pub email: String,
     pub expires_in_secs: u64,
     pub dev_otp_preview: String,
+    pub smtp_dispatched: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,15 +166,32 @@ pub async fn request_otp(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
 
-    info!("[SECURE OTP DISPATCH] Generated OTP {} for user {} ({})", otp_code, username, email);
+    // Dispatch real email via SMTP
+    let (smtp_dispatched, message) = match crate::email::send_otp_email(&email, &username, &otp_code, &state.config).await {
+        Ok(true) => (
+            true,
+            "A 6-digit verification code has been dispatched directly to your email inbox. Please check your inbox and spam folder.".to_string(),
+        ),
+        Ok(false) => (
+            false,
+            "SMTP server is not configured in backend/.env. For local testing, your verification code is displayed below.".to_string(),
+        ),
+        Err(e) => (
+            false,
+            format!("SMTP email delivery failed ({}). Fallback code generated below for testing.", e),
+        ),
+    };
+
+    info!("[SECURE OTP DISPATCH] Generated OTP {} for user {} ({}) | SMTP Dispatched: {}", otp_code, username, email, smtp_dispatched);
 
     Ok((
         StatusCode::OK,
         Json(OtpSentResponse {
-            message: "A 6-digit security verification code has been dispatched.".into(),
+            message,
             email: email.clone(),
             expires_in_secs: 600,
             dev_otp_preview: otp_code,
+            smtp_dispatched,
         }),
     ))
 }

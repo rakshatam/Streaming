@@ -9,10 +9,39 @@ pub struct Config {
     pub jwt_secret: String,
     pub segment_cache_mb: u64,
     pub token_validity_secs: u64,
+    pub smtp_host: Option<String>,
+    pub smtp_port: u16,
+    pub smtp_user: Option<String>,
+    pub smtp_pass: Option<String>,
+    pub smtp_from: String,
+}
+
+fn load_dotenv_if_present() {
+    let candidate_paths = [".env", "backend/.env", "../backend/.env"];
+    for path in &candidate_paths {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, v)) = line.split_once('=') {
+                    let key = k.trim();
+                    let val = v.trim().trim_matches('"').trim_matches('\'');
+                    if std::env::var(key).is_err() {
+                        std::env::set_var(key, val);
+                    }
+                }
+            }
+            break;
+        }
+    }
 }
 
 impl Config {
     pub fn from_env() -> Self {
+        load_dotenv_if_present();
+
         let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let server_port = env::var("SERVER_PORT")
             .ok()
@@ -33,6 +62,15 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3600); // 1 hour valid stream session tokens
 
+        let smtp_host = env::var("SMTP_HOST").ok().filter(|s| !s.trim().is_empty());
+        let smtp_port = env::var("SMTP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(587);
+        let smtp_user = env::var("SMTP_USER").ok().filter(|s| !s.trim().is_empty());
+        let smtp_pass = env::var("SMTP_PASS").ok().filter(|s| !s.trim().is_empty());
+        let smtp_from = env::var("SMTP_FROM").unwrap_or_else(|_| "StreamFlow Security <noreply@streamflow.tv>".to_string());
+
         Config {
             server_host,
             server_port,
@@ -41,6 +79,12 @@ impl Config {
             jwt_secret,
             segment_cache_mb,
             token_validity_secs,
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            smtp_pass,
+            smtp_from,
         }
     }
 }
+
