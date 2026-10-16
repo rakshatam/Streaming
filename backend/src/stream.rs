@@ -13,6 +13,7 @@ use crate::security::{sign_stream_token, verify_stream_token};
 pub struct StreamEngine {
     client: reqwest::Client,
     segment_cache: Cache<String, Bytes>,
+    manifest_cache: Cache<String, String>,
     hmac_secret: String,
     token_validity_secs: u64,
     // Metrics counters
@@ -25,11 +26,11 @@ pub struct StreamEngine {
 impl StreamEngine {
     pub fn new(hmac_secret: String, cache_mb: u64, token_validity_secs: u64) -> Self {
         let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(50)
-            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(100)
+            .pool_idle_timeout(Duration::from_secs(120))
             .tcp_nodelay(true)
             .tcp_keepalive(Duration::from_secs(30))
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(10))
             .danger_accept_invalid_certs(true) // Resilience against varied upstream CDNs
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .build()
@@ -43,11 +44,19 @@ impl StreamEngine {
             .time_to_idle(Duration::from_secs(120))
             .build();
 
-        info!("StreamEngine initialized with {} MB LRU cache.", cache_mb);
+        // High-speed manifest cache for sub-millisecond playlist delivery
+        let manifest_cache = Cache::builder()
+            .max_capacity(2000)
+            .time_to_live(Duration::from_secs(5)) // 5 seconds default TTL (avoids stale live windows)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        info!("StreamEngine initialized with {} MB LRU cache and Manifest Accelerator.", cache_mb);
 
         StreamEngine {
             client,
             segment_cache,
+            manifest_cache,
             hmac_secret,
             token_validity_secs,
             total_requests: Arc::new(AtomicU64::new(0)),
@@ -75,6 +84,13 @@ impl StreamEngine {
 
     /// Fetches upstream M3U8 manifest and rewrites sub-playlists and segments with signed gateway URLs
     pub async fn rewrite_manifest(&self, upstream_url: &str) -> Result<String, String> {
+        // Check manifest cache for instant sub-millisecond response
+        if let Some(cached_manifest) = self.manifest_cache.get(upstream_url).await {
+            self.total_requests.fetch_add(1, Ordering::Relaxed);
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(cached_manifest);
+        }
+
         let base_url = Url::parse(upstream_url)
             .map_err(|e| format!("Invalid upstream URL: {}", e))?;
 
@@ -138,6 +154,9 @@ impl StreamEngine {
                 ));
             }
         }
+
+        // Cache rewritten manifest
+        self.manifest_cache.insert(upstream_url.to_string(), rewritten.clone()).await;
 
         Ok(rewritten)
     }
@@ -231,8 +250,8 @@ impl StreamEngine {
         let byte_len = bytes.len();
         self.bytes_streamed.fetch_add(byte_len as u64, Ordering::Relaxed);
 
-        // Cache segments up to 8MB in memory
-        if byte_len <= 8 * 1024 * 1024 {
+        // Cache segments up to 10MB in memory
+        if byte_len <= 10 * 1024 * 1024 {
             self.segment_cache.insert(cache_key, bytes.clone()).await;
         }
 

@@ -31,6 +31,11 @@ pub struct AuthResponse {
     pub user: UserDto,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AuthError {
+    pub message: String,
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct UserDto {
     pub id: String,
@@ -53,13 +58,18 @@ struct UserRecord {
 pub async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<AuthError>)> {
     if payload.username.trim().is_empty() || payload.email.trim().is_empty() || payload.password.len() < 6 {
-        return Err((StatusCode::BAD_REQUEST, "Username, valid email, and password of at least 6 characters required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthError {
+                message: "Username, valid email, and password of at least 6 characters required".into(),
+            }),
+        ));
     }
 
     let password_hash = hash_password(&payload.password)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
 
     let user_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
@@ -79,11 +89,16 @@ pub async fn register(
     .await;
 
     if let Err(e) = res {
-        return Err((StatusCode::CONFLICT, format!("User with this username or email already exists: {}", e)));
+        return Err((
+            StatusCode::CONFLICT,
+            Json(AuthError {
+                message: format!("User with this username or email already exists: {}", e),
+            }),
+        ));
     }
 
     let token = create_jwt(&user_id, &payload.username, "user", &state.config.jwt_secret, 7 * 86400)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
 
     let user = UserDto {
         id: user_id,
@@ -99,7 +114,7 @@ pub async fn register(
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<AuthError>)> {
     let user = sqlx::query_as::<_, UserRecord>(
         r#"
         SELECT id, username, email, password_hash, role, created_at
@@ -111,22 +126,34 @@ pub async fn login(
     .bind(&payload.username_or_email)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
 
     let user = match user {
         Some(u) => u,
-        None => return Err((StatusCode::UNAUTHORIZED, "Invalid username or password".into())),
+        None => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(AuthError {
+                    message: "Invalid username or password".into(),
+                }),
+            ))
+        }
     };
 
     let is_valid = verify_password(&payload.password, &user.password_hash)
         .unwrap_or(false);
 
     if !is_valid {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid username or password".into()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthError {
+                message: "Invalid username or password".into(),
+            }),
+        ));
     }
 
     let token = create_jwt(&user.id, &user.username, &user.role, &state.config.jwt_secret, 7 * 86400)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
 
     let user_dto = UserDto {
         id: user.id,
@@ -142,15 +169,20 @@ pub async fn login(
 pub async fn me(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<AuthError>)> {
     let auth_header = headers
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing or invalid authorization header".to_string()))?;
+        .ok_or_else(|| (
+            StatusCode::UNAUTHORIZED,
+            Json(AuthError {
+                message: "Missing or invalid authorization header".to_string(),
+            }),
+        ))?;
 
     let claims = verify_jwt(auth_header, &state.config.jwt_secret)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
+        .map_err(|e| (StatusCode::UNAUTHORIZED, Json(AuthError { message: e })))?;
 
     let user = sqlx::query_as::<_, UserDto>(
         r#"
@@ -162,8 +194,13 @@ pub async fn me(
     .bind(&claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, "User not found".to_string()))?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?
+    .ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(AuthError {
+            message: "User not found".to_string(),
+        }),
+    ))?;
 
     Ok(Json(user))
 }

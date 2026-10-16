@@ -48,7 +48,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const navCategories = ['All', 'Movies', 'Sci-Fi', 'Live', 'Documentary', 'Animation'];
+  const navCategories = ['All', 'Live', 'Movies', 'Sports', 'News', 'Sci-Fi', 'Documentary', 'Entertainment'];
 
   return (
     <header

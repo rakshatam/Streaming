@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Play, Radio, Star, Eye } from 'lucide-react';
 import { Video } from '../types';
 
@@ -9,7 +9,12 @@ interface VideoCardProps {
   onPlay: (video: Video) => void;
 }
 
+const FALLBACK_POSTER = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&q=80';
+
 export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
+  const [imgSrc, setImgSrc] = useState(video.thumbnail_url);
+  const [imgLoaded, setImgLoaded] = useState(false);
+
   const formatDuration = (secs: number) => {
     if (secs <= 0) return 'Live';
     const mins = Math.floor(secs / 60);
@@ -31,9 +36,13 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
       {/* Thumbnail Container */}
       <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-slate-900 border border-white/5 group-hover:border-red-500/50 shadow-md group-hover:shadow-2xl group-hover:shadow-red-600/20 group-hover:-translate-y-1.5 transition-all duration-300">
         <img
-          src={video.thumbnail_url}
+          src={imgSrc}
           alt={video.title}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          onLoad={() => setImgLoaded(true)}
+          onError={() => setImgSrc(FALLBACK_POSTER)}
+          className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-500 ${
+            imgLoaded ? 'opacity-100' : 'opacity-80 blur-[2px]'
+          }`}
           loading="lazy"
         />
 

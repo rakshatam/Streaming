@@ -76,9 +76,17 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+        startFragPrefetch: true,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 20,
+        maxBufferSize: 30 * 1000 * 1000,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 4,
+        capLevelToPlayerSize: true,
+        fragLoadingTimeOut: 12000,
+        manifestLoadingTimeOut: 6000,
+        levelLoadingTimeOut: 6000,
+        progressive: true,
       });
 
       hlsRef.current = hls;

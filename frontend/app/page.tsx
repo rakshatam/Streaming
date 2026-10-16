@@ -8,7 +8,7 @@ import { VideoPlayerModal } from '../components/VideoPlayerModal';
 import { SearchModal } from '../components/SearchModal';
 import { AuthModal } from '../components/AuthModal';
 import { Video, User } from '../types';
-import { ChevronRight, Radio, Film, Compass, ShieldCheck } from 'lucide-react';
+import { Radio, Film, Compass, ShieldCheck, Trophy, Newspaper, Sparkles, Tv } from 'lucide-react';
 
 export default function Home() {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -79,6 +79,8 @@ export default function Home() {
   // Categorized sections
   const liveChannels = videos.filter((v) => v.is_live === 1);
   const movies = videos.filter((v) => v.category === 'Movies' || v.category === 'Sci-Fi' || v.category === 'Animation');
+  const sports = videos.filter((v) => v.category === 'Sports');
+  const news = videos.filter((v) => v.category === 'News');
   const documentaries = videos.filter((v) => v.category === 'Documentary' || v.category === 'Science');
   const entertainment = videos.filter((v) => v.category === 'Entertainment' || v.category === 'Lifestyle');
 
@@ -108,7 +110,7 @@ export default function Home() {
                 <h2 className="text-2xl font-black text-white tracking-tight flex items-center gap-2">
                   <span>{selectedCategory} Streams</span>
                   <span className="text-sm font-semibold px-2.5 py-0.5 rounded-full bg-red-600/20 text-red-400 border border-red-600/30">
-                    {filteredVideos.length} Channels
+                    {filteredVideos.length} Channels Available
                   </span>
                 </h2>
               </div>
@@ -147,7 +149,25 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Row 2: Movies & Open Cinema VOD */}
+              {/* Row 2: Sports & Action */}
+              {sports.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                      <Trophy className="w-5 h-5 text-amber-500" />
+                      Live Sports, Motorsports & Extreme
+                    </h2>
+                  </div>
+
+                  <div className="flex space-x-5 overflow-x-auto pb-4 pt-1 hide-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+                    {sports.map((video) => (
+                      <VideoCard key={video.id} video={video} onPlay={(v) => setActiveVideo(v)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Row 3: Movies & Cinema VOD */}
               {movies.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -165,7 +185,25 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Row 3: Science & Documentary */}
+              {/* Row 4: News & World Headlines */}
+              {news.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                      <Newspaper className="w-5 h-5 text-sky-400" />
+                      24/7 International News & Headlines
+                    </h2>
+                  </div>
+
+                  <div className="flex space-x-5 overflow-x-auto pb-4 pt-1 hide-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+                    {news.map((video) => (
+                      <VideoCard key={video.id} video={video} onPlay={(v) => setActiveVideo(v)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Row 5: Science & Documentary */}
               {documentaries.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -183,12 +221,13 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Row 4: Entertainment & Lifestyle */}
+              {/* Row 6: Entertainment & Reality */}
               {entertainment.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                      Lifestyle & Entertainment
+                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                      <Tv className="w-5 h-5 text-purple-400" />
+                      Entertainment, Comedy & Reality
                     </h2>
                   </div>
 

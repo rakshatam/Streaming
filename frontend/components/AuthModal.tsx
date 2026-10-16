@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Lock, Mail, User, ShieldCheck } from 'lucide-react';
+import { X, Lock, Mail, User, ShieldCheck, Zap } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface AuthModalProps {
@@ -37,10 +37,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text || 'Authentication failed' };
+      }
 
       if (!res.ok) {
-        throw new Error(data.message || data || 'Authentication failed');
+        throw new Error(data.message || data.error || 'Invalid credentials or user already exists');
       }
 
       localStorage.setItem('streamflow_token', data.token);
@@ -51,6 +57,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleUseDemo = () => {
+    setIsRegister(false);
+    setUsername('demo');
+    setPassword('demo123');
+    setError(null);
   };
 
   return (
@@ -79,9 +92,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         </div>
 
         {error && (
-          <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+          <div className="p-3.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium">
             {error}
           </div>
+        )}
+
+        {/* Demo Account Quick-Fill */}
+        {!isRegister && (
+          <button
+            type="button"
+            onClick={handleUseDemo}
+            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-red-600/20 to-rose-600/20 hover:from-red-600/30 hover:to-rose-600/30 text-red-300 text-xs font-semibold border border-red-500/30 flex items-center justify-center gap-2 transition-all"
+          >
+            <Zap className="w-4 h-4 text-red-400" />
+            <span>1-Click Autofill Demo Account (demo / demo123)</span>
+          </button>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -94,7 +119,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="stream_master"
+                placeholder="demo"
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
               />
             </div>
