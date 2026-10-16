@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Search, Shield, Zap, User as UserIcon, Activity, Radio, Film, LogOut } from 'lucide-react';
+import { Search, Shield, Zap, User as UserIcon, Activity, Radio, Film, LogOut, Trash2 } from 'lucide-react';
 import { StreamMetrics, User } from '../types';
 
 interface NavbarProps {
@@ -23,6 +23,29 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [scrolled, setScrolled] = useState(false);
   const [metrics, setMetrics] = useState<StreamMetrics | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [cacheToast, setCacheToast] = useState<string | null>(null);
+
+  const handleClearCache = async () => {
+    setIsClearingCache(true);
+    try {
+      const res = await fetch('/api/cache/clear', { method: 'POST' });
+      if (res.ok) {
+        setCacheToast('Cache cleared successfully');
+        const mRes = await fetch('/api/metrics');
+        if (mRes.ok) {
+          setMetrics(await mRes.json());
+        }
+      } else {
+        setCacheToast('Failed to clear cache');
+      }
+    } catch {
+      setCacheToast('Cache clear failed');
+    } finally {
+      setIsClearingCache(false);
+      setTimeout(() => setCacheToast(null), 3000);
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -125,8 +148,27 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div>
                 Streamed: <span className="text-white font-semibold">{metrics.megabytes_streamed} MB</span>
               </div>
+              {metrics.segment_cache_entries !== undefined && (
+                <>
+                  <span className="text-slate-600">|</span>
+                  <div>
+                    Cached: <span className="text-white font-semibold">{metrics.segment_cache_entries}</span> segs
+                  </div>
+                </>
+              )}
             </div>
           )}
+
+          {/* Clear Cache Button */}
+          <button
+            onClick={handleClearCache}
+            disabled={isClearingCache}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-white/10 hover:border-rose-500/30 text-xs font-medium transition-all active:scale-95 disabled:opacity-50"
+            title="Clear segment and playlist in-memory cache"
+          >
+            <Trash2 className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin text-rose-400' : ''}`} />
+            <span className="hidden sm:inline">Clear Cache</span>
+          </button>
 
           {/* Search Trigger */}
           <button
@@ -168,6 +210,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Cache notification banner */}
+      {cacheToast && (
+        <div className="fixed top-20 right-6 z-50 px-4 py-2 bg-emerald-600/95 backdrop-blur-md text-white text-xs font-semibold rounded-xl shadow-xl shadow-emerald-950/40 border border-white/20 transition-all">
+          {cacheToast}
+        </div>
+      )}
     </header>
   );
 };

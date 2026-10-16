@@ -6,19 +6,19 @@ pub type DbPool = Pool<Sqlite>;
 
 pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
-        .max_connections(50)
-        .min_connections(5)
+        .max_connections(20)
+        .min_connections(2)
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Duration::from_secs(600))
         .connect(database_url)
         .await?;
 
-    // Enable high-performance concurrency PRAGMAs & strict foreign keys
+    // Enable concurrency PRAGMAs & strict foreign keys, tuned for low memory (Render free tier)
     sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await?;
     sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
     sqlx::query("PRAGMA foreign_keys = ON;").execute(&pool).await?;
-    sqlx::query("PRAGMA cache_size = -64000;").execute(&pool).await?; // 64 MB
-    sqlx::query("PRAGMA mmap_size = 268435456;").execute(&pool).await?; // 256 MB
+    sqlx::query("PRAGMA cache_size = -16000;").execute(&pool).await?; // 16 MB page cache
+    sqlx::query("PRAGMA mmap_size = 67108864;").execute(&pool).await?; // 64 MB memory-mapped I/O
     sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await?;
 
     // Create tables

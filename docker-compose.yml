@@ -13,9 +13,9 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
       - DATABASE_URL=sqlite:///app/data/streamflow.db?mode=rwc
-      - HMAC_SECRET=ultra_secure_netflix_tier_streamflow_hmac_secret_2026
+      - HMAC_SECRET=streamflow_hmac_secret_token_signing_2026
       - JWT_SECRET=super_secure_jwt_token_signing_secret_key_streamflow
-      - SEGMENT_CACHE_MB=512
+      - SEGMENT_CACHE_MB=64
       - TOKEN_VALIDITY_SECS=3600
     volumes:
       - streamflow_data:/app/data

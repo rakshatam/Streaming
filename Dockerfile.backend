@@ -44,7 +44,7 @@ COPY --from=builder /app/target/release/streamflow-backend /usr/local/bin/stream
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 ENV DATABASE_URL=sqlite:///app/data/streamflow.db?mode=rwc
-ENV SEGMENT_CACHE_MB=512
+ENV SEGMENT_CACHE_MB=64
 
 RUN mkdir -p /app/data
 

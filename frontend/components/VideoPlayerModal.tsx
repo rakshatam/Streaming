@@ -18,6 +18,7 @@ import {
   Check,
   Heart,
   Star,
+  Trash2,
 } from 'lucide-react';
 import { Video } from '../types';
 
@@ -186,6 +187,24 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       }
     } catch (e) {
       console.error('Rating failed', e);
+    }
+  };
+
+  const [clearingCache, setClearingCache] = useState(false);
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      const res = await fetch('/api/cache/clear', { method: 'POST' });
+      if (res.ok) {
+        setInteractionToast('Stream cache cleared successfully');
+      } else {
+        setInteractionToast('Failed to clear cache');
+      }
+    } catch {
+      setInteractionToast('Cache clear failed');
+    } finally {
+      setClearingCache(false);
+      setTimeout(() => setInteractionToast(null), 2500);
     }
   };
 
@@ -562,6 +581,18 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
             <div className="flex justify-between">
               <span>Token:</span>
               <span className="text-emerald-400 font-semibold">Verified</span>
+            </div>
+            <div className="flex justify-between items-center pt-2 border-t border-white/10">
+              <span className="text-slate-400">Stream Cache:</span>
+              <button
+                onClick={handleClearCache}
+                disabled={clearingCache}
+                className="px-2 py-1 bg-white/10 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 rounded-md border border-white/10 text-[10px] font-sans flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
+                title="Purge in-memory segment cache"
+              >
+                <Trash2 className={`w-3 h-3 ${clearingCache ? 'animate-spin text-rose-400' : ''}`} />
+                <span>{clearingCache ? 'Purging...' : 'Clear Cache'}</span>
+              </button>
             </div>
           </div>
         )}

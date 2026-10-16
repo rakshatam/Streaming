@@ -66,6 +66,25 @@ impl StreamEngine {
         }
     }
 
+    /// Clears in-memory manifest and segment caches, immediately releasing allocated memory
+    pub async fn clear_cache(&self) {
+        self.manifest_cache.invalidate_all();
+        self.segment_cache.invalidate_all();
+        self.manifest_cache.run_pending_tasks().await;
+        self.segment_cache.run_pending_tasks().await;
+    }
+
+    /// Returns the current number of cached manifests and segments
+    pub fn cache_entry_counts(&self) -> (u64, u64) {
+        (self.manifest_cache.entry_count(), self.segment_cache.entry_count())
+    }
+
+    /// Resets cache hit/miss counters
+    pub fn reset_cache_counters(&self) {
+        self.cache_hits.store(0, Ordering::Relaxed);
+        self.cache_misses.store(0, Ordering::Relaxed);
+    }
+
     /// Generates an HMAC-signed token for a target URI
     pub fn create_token(&self, target_uri: &str) -> (String, u64) {
         let now = SystemTime::now()

@@ -31,6 +31,8 @@ export interface StreamMetrics {
   cache_hit_ratio_percent: number;
   bytes_streamed: number;
   megabytes_streamed: number;
+  segment_cache_entries?: number;
+  manifest_cache_entries?: number;
 }
 
 export interface HistoryItem {

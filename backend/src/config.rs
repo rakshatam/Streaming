@@ -56,7 +56,7 @@ impl Config {
         let segment_cache_mb = env::var("SEGMENT_CACHE_MB")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(256); // 256MB in-memory segment cache
+            .unwrap_or(64); // 64MB default in-memory cache, tuned for Render free tier (512MB RAM cap)
         let token_validity_secs = env::var("TOKEN_VALIDITY_SECS")
             .ok()
             .and_then(|v| v.parse().ok())

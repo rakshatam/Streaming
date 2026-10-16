@@ -16,6 +16,7 @@ pub fn create_router() -> Router<AppState> {
         // Health & Metrics
         .route("/api/health", get(health::health_check))
         .route("/api/metrics", get(health::get_metrics))
+        .route("/api/cache/clear", post(health::clear_cache).get(health::clear_cache))
         // Authentication (Pure Username + Argon2id Password)
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
