@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Search, Shield, Zap, User as UserIcon, Activity, Radio, Film } from 'lucide-react';
+import { Search, Shield, Zap, User as UserIcon, Activity, Radio, Film, LogOut } from 'lucide-react';
 import { StreamMetrics, User } from '../types';
 
 interface NavbarProps {
@@ -9,6 +9,7 @@ interface NavbarProps {
   onCategorySelect: (category: string) => void;
   selectedCategory: string;
   onAuthClick: () => void;
+  onSignOut: () => void;
   currentUser: User | null;
 }
 
@@ -17,6 +18,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onCategorySelect,
   selectedCategory,
   onAuthClick,
+  onSignOut,
   currentUser,
 }) => {
   const [scrolled, setScrolled] = useState(false);
@@ -139,16 +141,31 @@ export const Navbar: React.FC<NavbarProps> = ({
             </kbd>
           </button>
 
-          {/* User Profile / Auth Button */}
-          <button
-            onClick={onAuthClick}
-            className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-all shadow-lg shadow-red-600/20 active:scale-95"
-          >
-            <UserIcon className="w-4 h-4" />
-            <span className="hidden sm:inline">
-              {currentUser ? currentUser.username : 'Sign In'}
-            </span>
-          </button>
+          {/* User Profile & Sign Out Actions */}
+          {currentUser ? (
+            <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/10 border border-white/10 text-white text-xs font-semibold">
+                <UserIcon className="w-3.5 h-3.5 text-red-500" />
+                <span className="max-w-[120px] truncate">{currentUser.username}</span>
+              </div>
+              <button
+                onClick={onSignOut}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-600/20 text-slate-400 hover:text-red-400 border border-white/10 hover:border-red-500/30 text-xs font-medium transition-all active:scale-95"
+                title="Sign out of your account"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onAuthClick}
+              className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-all shadow-lg shadow-red-600/20 active:scale-95"
+            >
+              <UserIcon className="w-4 h-4" />
+              <span>Sign In</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

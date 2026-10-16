@@ -13,9 +13,10 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
         .connect(database_url)
         .await?;
 
-    // Enable high-performance concurrency PRAGMAs
+    // Enable high-performance concurrency PRAGMAs & strict foreign keys
     sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await?;
     sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
+    sqlx::query("PRAGMA foreign_keys = ON;").execute(&pool).await?;
     sqlx::query("PRAGMA cache_size = -64000;").execute(&pool).await?; // 64 MB
     sqlx::query("PRAGMA mmap_size = 268435456;").execute(&pool).await?; // 256 MB
     sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await?;
@@ -26,7 +27,7 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
+            email TEXT,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'user',
             created_at INTEGER NOT NULL
@@ -86,16 +87,6 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
             PRIMARY KEY (user_id, video_id),
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS email_otps (
-            email TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            otp_code TEXT NOT NULL,
-            attempts_left INTEGER NOT NULL DEFAULT 5,
-            expires_at INTEGER NOT NULL,
-            created_at INTEGER NOT NULL
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_videos USING fts5(

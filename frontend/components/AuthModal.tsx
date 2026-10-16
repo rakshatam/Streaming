@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Lock, Mail, User, ShieldCheck, KeyRound, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { X, Lock, User, ShieldCheck, ArrowRight, CheckCircle2, UserPlus } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface AuthModalProps {
@@ -12,71 +12,49 @@ interface AuthModalProps {
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const [isRegister, setIsRegister] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [smtpDispatched, setSmtpDispatched] = useState<boolean>(false);
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  // Step 1 of Register: Request OTP
-  const handleRequestOtp = async (e: React.FormEvent) => {
+  // Direct, Secure Registration (Pure Username + Argon2id Password)
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
-    setIsLoading(true);
 
-    try {
-      const res = await fetch('/api/auth/register/request-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password }),
-      });
-
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { message: text };
-      }
-
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to request verification code');
-      }
-
-      setOtpSent(true);
-      setSmtpDispatched(!!data.smtp_dispatched);
-      setDevOtpHint(data.dev_otp_preview);
-      if (data.smtp_dispatched) {
-        setSuccessMsg(`Security verification email sent to ${email}! Please check your inbox (and spam/junk folder).`);
-      } else {
-        setSuccessMsg(data.message || `Verification code generated. Configure SMTP in backend/.env to send real emails.`);
-      }
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
+    const cleanUsername = username.trim();
+    if (cleanUsername.length < 3 || cleanUsername.length > 30) {
+      setError('Username must be between 3 and 30 characters.');
+      return;
     }
-  };
 
-  // Step 2 of Register: Verify OTP & Create Account
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
+    if (!/^[a-zA-Z0-9_-]+$/.test(cleanUsername)) {
+      setError('Username can only contain letters, numbers, underscores, and hyphens.');
+      return;
+    }
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match. Please re-enter.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      const res = await fetch('/api/auth/register/verify-otp', {
+      const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp_code: otpCode }),
+        body: JSON.stringify({ username: cleanUsername, password }),
       });
 
       const text = await res.text();
@@ -88,12 +66,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       }
 
       if (!res.ok) {
-        throw new Error(data.message || 'OTP verification failed');
+        throw new Error(data.message || 'Registration failed');
       }
 
       localStorage.setItem('streamflow_token', data.token);
-      onSuccess(data.user, data.token);
-      onClose();
+      setSuccessMsg(`Welcome, ${data.user.username}! Account created securely.`);
+      setTimeout(() => {
+        onSuccess(data.user, data.token);
+        onClose();
+      }, 600);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -101,7 +82,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     }
   };
 
-  // Login: Pure Username + Password
+  // Direct, Secure Sign In (Username + Password)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -111,7 +92,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
 
       const text = await res.text();
@@ -136,17 +117,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     }
   };
 
-  const resetForm = () => {
+  const switchMode = (toRegister: boolean) => {
+    setIsRegister(toRegister);
     setError(null);
     setSuccessMsg(null);
-    setOtpSent(false);
-    setSmtpDispatched(false);
-    setDevOtpHint(null);
-    setOtpCode('');
+    setPassword('');
+    setConfirmPassword('');
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200">
       <div className="relative w-full max-w-md rounded-3xl bg-[#0e0e16] border border-white/10 p-6 sm:p-8 shadow-2xl space-y-6">
         <button
           onClick={onClose}
@@ -155,25 +135,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           <X className="w-4 h-4" />
         </button>
 
+        {/* Header */}
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-red-500 font-bold text-xs uppercase tracking-wider">
             <ShieldCheck className="w-4 h-4" />
-            <span>Argon2id Enterprise Security</span>
+            <span>Argon2id Cryptographic Security</span>
           </div>
           <h3 className="text-2xl font-bold text-white tracking-tight">
-            {isRegister
-              ? otpSent
-                ? 'Verify Security OTP'
-                : 'Create Account with Email OTP'
-              : 'Sign In with Username'}
+            {isRegister ? 'Create Account' : 'Sign In'}
           </h3>
           <p className="text-xs text-slate-400">
             {isRegister
-              ? otpSent
-                ? `Enter the 6-digit verification code dispatched to ${email}`
-                : 'Create your account safely using our two-factor email verification protocol.'
-              : 'Enter your username and password to access rating, liking, and watch history.'}
+              ? 'Choose a unique username and strong password. No email required.'
+              : 'Enter your credentials to rate, like, and save videos.'}
           </p>
+        </div>
+
+        {/* Tab Toggle */}
+        <div className="flex rounded-xl bg-white/5 p-1 border border-white/5">
+          <button
+            type="button"
+            onClick={() => switchMode(false)}
+            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
+              !isRegister ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode(true)}
+            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
+              isRegister ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Create Account
+          </button>
         </div>
 
         {error && (
@@ -189,44 +186,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           </div>
         )}
 
-        {/* Real Email Dispatched Banner or Local OTP Preview */}
-        {otpSent && (
-          smtpDispatched ? (
-            <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs space-y-1.5">
-              <div className="text-emerald-300 font-semibold flex items-center gap-1.5">
-                <Mail className="w-4 h-4 text-emerald-400" /> Real Email Dispatched Over SMTP
-              </div>
-              <p className="text-slate-300 text-[11px] leading-relaxed">
-                A verification email was sent to <strong className="text-white">{email}</strong>. Please check your inbox and spam folder.
-              </p>
-            </div>
-          ) : (
-            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-2">
-              <div className="text-amber-300 font-semibold flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <KeyRound className="w-4 h-4 text-amber-400" /> Local Test Code (SMTP Unconfigured)
-                </span>
-                {devOtpHint && (
-                  <button
-                    type="button"
-                    onClick={() => setOtpCode(devOtpHint)}
-                    className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-mono text-[11px] font-bold tracking-wider transition-colors"
-                    title="Click to auto-fill code"
-                  >
-                    Auto-Fill {devOtpHint}
-                  </button>
-                )}
-              </div>
-              <p className="text-slate-300 text-[11px] leading-relaxed">
-                No email was received because SMTP is not yet configured in <code className="text-amber-200">backend/.env</code>. To receive live emails in your inbox, set your SMTP credentials in <code className="text-amber-200">backend/.env</code>.
-              </p>
-            </div>
-          )
-        )}
-
-        {/* Forms */}
+        {/* Sign In Form */}
         {!isRegister ? (
-          /* Login Form: Pure Username + Password */
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-slate-300">Username</label>
@@ -261,14 +222,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 transition-all disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {isLoading ? 'Verifying Credentials...' : 'Sign In'}
+              <span>{isLoading ? 'Verifying...' : 'Sign In'}</span>
+              <ArrowRight className="w-4 h-4" />
             </button>
           </form>
-        ) : !otpSent ? (
-          /* Register Form Step 1: Input details & send OTP */
-          <form onSubmit={handleRequestOtp} className="space-y-4">
+        ) : (
+          /* Create Account Form (Pure Username + Password) */
+          <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-slate-300">Choose Username</label>
               <div className="relative flex items-center">
@@ -280,38 +242,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                   maxLength={30}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="alex_streamer"
+                  placeholder="e.g. alex_hunter"
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
+              <span className="text-[10px] text-slate-500">3–30 characters (letters, numbers, _ and -)</span>
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Email Address (For OTP)</label>
-              <div className="relative flex items-center">
-                <Mail className="absolute left-3 w-4 h-4 text-slate-500" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="alex@example.com"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Set Password (Min 8 chars)</label>
+              <label className="text-xs font-semibold text-slate-300">Set Password</label>
               <div className="relative flex items-center">
                 <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="password"
                   required
                   minLength={8}
+                  maxLength={128}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="At least 8 characters"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Confirm Password</label>
+              <div className="relative flex items-center">
+                <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  maxLength={128}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat your password"
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
@@ -320,45 +286,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
             >
-              <span>{isLoading ? 'Generating OTP...' : 'Send Security OTP Code'}</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
-        ) : (
-          /* Register Form Step 2: Verify OTP */
-          <form onSubmit={handleVerifyOtp} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Enter 6-Digit OTP Code</label>
-              <div className="relative flex items-center">
-                <KeyRound className="absolute left-3 w-4 h-4 text-slate-500" />
-                <input
-                  type="text"
-                  required
-                  maxLength={6}
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value)}
-                  placeholder="123456"
-                  className="w-full pl-9 pr-3 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-lg font-mono tracking-widest text-center focus:outline-none focus:border-red-500 transition-colors"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/30 transition-all disabled:opacity-50"
-            >
-              {isLoading ? 'Verifying...' : 'Verify OTP & Complete Account'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setOtpSent(false)}
-              className="w-full text-xs text-slate-400 hover:text-slate-300 text-center"
-            >
-              Back to edit details
+              <UserPlus className="w-4 h-4" />
+              <span>{isLoading ? 'Creating Account...' : 'Create Account'}</span>
             </button>
           </form>
         )}
@@ -366,15 +297,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         <div className="text-center pt-2 border-t border-white/5">
           <button
             type="button"
-            onClick={() => {
-              setIsRegister(!isRegister);
-              resetForm();
-            }}
+            onClick={() => switchMode(!isRegister)}
             className="text-xs text-slate-400 hover:text-white transition-colors"
           >
             {isRegister
-              ? 'Already registered? Sign In with Username'
-              : "Need an account? Create One with Secure Email OTP"}
+              ? 'Already have an account? Sign In here'
+              : "Don't have an account yet? Create one in seconds"}
           </button>
         </div>
       </div>

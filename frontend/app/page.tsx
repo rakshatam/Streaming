@@ -53,6 +53,11 @@ export default function Home() {
     }
   }, []);
 
+  const handleSignOut = () => {
+    localStorage.removeItem('streamflow_token');
+    setCurrentUser(null);
+  };
+
   // Keyboard shortcut for search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -93,6 +98,7 @@ export default function Home() {
           onCategorySelect={(cat) => setSelectedCategory(cat)}
           selectedCategory={selectedCategory}
           onAuthClick={() => setIsAuthOpen(true)}
+          onSignOut={handleSignOut}
           currentUser={currentUser}
         />
 

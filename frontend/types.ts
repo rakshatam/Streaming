@@ -19,7 +19,7 @@ export interface Video {
 export interface User {
   id: string;
   username: string;
-  email: string;
+  email?: string;
   role: string;
   created_at: number;
 }
