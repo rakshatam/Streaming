@@ -1,0 +1,135 @@
+name: StreamFlow CI & High-Throughput Verification
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-security-and-tests:
+    name: Rust Security, Auth & Streaming Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+
+      - name: Verify Backend Compilation
+        working-directory: backend
+        run: cargo check --verbose
+
+      - name: Execute Full Integration Test Suite
+        working-directory: backend
+        run: cargo test --verbose
+
+  frontend-build:
+    name: Next.js Cinematic Frontend Build & Typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Next.js Production Bundle
+        working-directory: frontend
+        run: npm run build
+
+  throughput-benchmarking:
+    name: High-Throughput & Latency Benchmarks
+    needs: [rust-security-and-tests, frontend-build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Optimized Release Binary
+        working-directory: backend
+        run: cargo build --release
+
+      - name: Launch StreamFlow Edge Server
+        run: |
+          ./backend/target/release/streamflow-backend &
+          echo $! > server.pid
+          sleep 3
+
+      - name: Run Throughput & Latency Benchmark Suite
+        run: python scripts/throughput_benchmark.py
+
+      - name: Teardown Server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill $(cat server.pid) || true
+          fi
+
+  docker-containerization:
+    name: Multi-Stage Container Build
+    needs: [throughput-benchmarking]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend Micro-Container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: false
+          tags: streamflow-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Frontend Container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: false
+          tags: streamflow-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
