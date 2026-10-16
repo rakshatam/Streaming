@@ -1,34 +1,26 @@
-# ==========================================
-# Multi-Stage High-Performance Rust Container
-# ==========================================
-FROM rust:1.80-slim-bookworm AS builder
+FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies including SQLite and SSL development libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
+    libsqlite3-dev \
     build-essential \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency manifests for cache layering
+# Copy dependency manifests and source files
 COPY backend/Cargo.toml backend/Cargo.lock* ./
-RUN mkdir src tests && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "pub fn dummy() {}" > src/lib.rs && \
-    cargo build --release && \
-    rm -rf src tests
-
-# Copy actual source code
 COPY backend/src ./src
 COPY backend/tests ./tests
 
-# Build optimized release binary
-RUN touch src/main.rs src/lib.rs && cargo build --release
+# Build optimized production binary
+RUN cargo build --release
 
 # ==========================================
-# Minimal Distroless/Slim Production Runtime
+# Minimal Production Runtime
 # ==========================================
 FROM debian:bookworm-slim AS runtime
 
@@ -37,6 +29,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    libsqlite3-0 \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/streamflow-backend /usr/local/bin/streamflow-backend
