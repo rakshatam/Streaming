@@ -211,6 +211,12 @@ This starts both the Rust backend (`http://localhost:8080`) and the Next.js fron
 
 ---
 
+## Storage & Maintenance
+
+For details on managing compiler build artifacts, reclaiming local disk space, and reducing debug symbol overhead, see [STORAGE_AND_MAINTENANCE.md](STORAGE_AND_MAINTENANCE.md).
+
+---
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
