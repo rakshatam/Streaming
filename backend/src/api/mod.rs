@@ -16,8 +16,9 @@ pub fn create_router() -> Router<AppState> {
         // Health & Metrics
         .route("/api/health", get(health::health_check))
         .route("/api/metrics", get(health::get_metrics))
-        // Authentication
-        .route("/api/auth/register", post(auth::register))
+        // Authentication & Secure OTP Registration
+        .route("/api/auth/register/request-otp", post(auth::request_otp))
+        .route("/api/auth/register/verify-otp", post(auth::verify_otp))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/me", get(auth::me))
         // Video Catalog & Search
@@ -25,6 +26,10 @@ pub fn create_router() -> Router<AppState> {
         .route("/api/videos/search", get(videos::search_videos))
         .route("/api/videos/categories", get(videos::get_categories))
         .route("/api/videos/:id", get(videos::get_video))
+        // Interactive Likes & Ratings
+        .route("/api/videos/:id/interactions", get(videos::get_interactions))
+        .route("/api/videos/:id/like", post(videos::toggle_like))
+        .route("/api/videos/:id/rate", post(videos::rate_video))
         // High-Throughput Stream Proxy
         .route("/api/stream/manifest/:id", get(stream_routes::get_manifest))
         .route("/api/stream/playlist", get(stream_routes::get_playlist))

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Lock, Mail, User, ShieldCheck, Zap } from 'lucide-react';
+import { X, Lock, Mail, User, ShieldCheck, KeyRound, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface AuthModalProps {
@@ -12,29 +12,30 @@ interface AuthModalProps {
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const [isRegister, setIsRegister] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Step 1 of Register: Request OTP
+  const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setIsLoading(true);
 
-    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-    const payload = isRegister
-      ? { username, email, password }
-      : { username_or_email: username || email, password };
-
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/auth/register/request-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ username, email, password }),
       });
 
       const text = await res.text();
@@ -42,11 +43,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       try {
         data = JSON.parse(text);
       } catch {
-        data = { message: text || 'Authentication failed' };
+        data = { message: text };
       }
 
       if (!res.ok) {
-        throw new Error(data.message || data.error || 'Invalid credentials or user already exists');
+        throw new Error(data.message || 'Failed to request verification code');
+      }
+
+      setOtpSent(true);
+      setDevOtpHint(data.dev_otp_preview);
+      setSuccessMsg(`Security OTP sent to ${email}. Check below for instant preview code.`);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Step 2 of Register: Verify OTP & Create Account
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/register/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, otp_code: otpCode }),
+      });
+
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text };
+      }
+
+      if (!res.ok) {
+        throw new Error(data.message || 'OTP verification failed');
       }
 
       localStorage.setItem('streamflow_token', data.token);
@@ -59,11 +95,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     }
   };
 
-  const handleUseDemo = () => {
-    setIsRegister(false);
-    setUsername('demo');
-    setPassword('demo123');
+  // Login: Pure Username + Password
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text };
+      }
+
+      if (!res.ok) {
+        throw new Error(data.message || 'Invalid username or password');
+      }
+
+      localStorage.setItem('streamflow_token', data.token);
+      onSuccess(data.user, data.token);
+      onClose();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resetForm = () => {
+    setError(null);
+    setSuccessMsg(null);
+    setOtpSent(false);
+    setDevOtpHint(null);
+    setOtpCode('');
   };
 
   return (
@@ -79,15 +151,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-red-500 font-bold text-xs uppercase tracking-wider">
             <ShieldCheck className="w-4 h-4" />
-            <span>Argon2id Enterprise Auth</span>
+            <span>Argon2id Enterprise Security</span>
           </div>
           <h3 className="text-2xl font-bold text-white tracking-tight">
-            {isRegister ? 'Create StreamFlow Account' : 'Welcome to StreamFlow'}
+            {isRegister
+              ? otpSent
+                ? 'Verify Security OTP'
+                : 'Create Account with Email OTP'
+              : 'Sign In with Username'}
           </h3>
           <p className="text-xs text-slate-400">
             {isRegister
-              ? 'Unlock high-throughput 1080p stream sessions & personal watchlist.'
-              : 'Sign in to access personalized streams, bookmarks, and watch history.'}
+              ? otpSent
+                ? `Enter the 6-digit verification code dispatched to ${email}`
+                : 'Create your account safely using our two-factor email verification protocol.'
+              : 'Enter your username and password to access rating, liking, and watch history.'}
           </p>
         </div>
 
@@ -97,37 +175,89 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           </div>
         )}
 
-        {/* Demo Account Quick-Fill */}
-        {!isRegister && (
-          <button
-            type="button"
-            onClick={handleUseDemo}
-            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-red-600/20 to-rose-600/20 hover:from-red-600/30 hover:to-rose-600/30 text-red-300 text-xs font-semibold border border-red-500/30 flex items-center justify-center gap-2 transition-all"
-          >
-            <Zap className="w-4 h-4 text-red-400" />
-            <span>1-Click Autofill Demo Account (demo / demo123)</span>
-          </button>
+        {successMsg && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+            <span>{successMsg}</span>
+          </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-300">Username</label>
-            <div className="relative flex items-center">
-              <User className="absolute left-3 w-4 h-4 text-slate-500" />
-              <input
-                type="text"
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="demo"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
-              />
-            </div>
+        {/* Developer OTP Preview Badge */}
+        {devOtpHint && (
+          <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs flex items-center justify-between">
+            <span className="text-indigo-300 font-semibold flex items-center gap-1.5">
+              <KeyRound className="w-4 h-4" /> OTP Security Code:
+            </span>
+            <span className="px-2.5 py-1 rounded bg-indigo-600/30 text-indigo-200 font-mono font-bold tracking-widest text-sm">
+              {devOtpHint}
+            </span>
           </div>
+        )}
 
-          {isRegister && (
+        {/* Forms */}
+        {!isRegister ? (
+          /* Login Form: Pure Username + Password */
+          <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Email Address</label>
+              <label className="text-xs font-semibold text-slate-300">Username</label>
+              <div className="relative flex items-center">
+                <User className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your username"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Password</label>
+              <div className="relative flex items-center">
+                <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 transition-all disabled:opacity-50"
+            >
+              {isLoading ? 'Verifying Credentials...' : 'Sign In'}
+            </button>
+          </form>
+        ) : !otpSent ? (
+          /* Register Form Step 1: Input details & send OTP */
+          <form onSubmit={handleRequestOtp} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Choose Username</label>
+              <div className="relative flex items-center">
+                <User className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  required
+                  minLength={3}
+                  maxLength={30}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="alex_streamer"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Email Address (For OTP)</label>
               <div className="relative flex items-center">
                 <Mail className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
@@ -135,50 +265,86 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="user@example.com"
+                  placeholder="alex@example.com"
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
             </div>
-          )}
 
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-300">Password</label>
-            <div className="relative flex items-center">
-              <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
-              />
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Set Password (Min 8 chars)</label>
+              <div className="relative flex items-center">
+                <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 transition-all disabled:opacity-50"
-          >
-            {isLoading ? 'Processing...' : isRegister ? 'Register Account' : 'Sign In'}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+            >
+              <span>{isLoading ? 'Generating OTP...' : 'Send Security OTP Code'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
+        ) : (
+          /* Register Form Step 2: Verify OTP */
+          <form onSubmit={handleVerifyOtp} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300">Enter 6-Digit OTP Code</label>
+              <div className="relative flex items-center">
+                <KeyRound className="absolute left-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  placeholder="123456"
+                  className="w-full pl-9 pr-3 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-lg font-mono tracking-widest text-center focus:outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+            </div>
 
-        <div className="text-center pt-2">
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/30 transition-all disabled:opacity-50"
+            >
+              {isLoading ? 'Verifying...' : 'Verify OTP & Complete Account'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setOtpSent(false)}
+              className="w-full text-xs text-slate-400 hover:text-slate-300 text-center"
+            >
+              Back to edit details
+            </button>
+          </form>
+        )}
+
+        <div className="text-center pt-2 border-t border-white/5">
           <button
             type="button"
             onClick={() => {
               setIsRegister(!isRegister);
-              setError(null);
+              resetForm();
             }}
             className="text-xs text-slate-400 hover:text-white transition-colors"
           >
             {isRegister
-              ? 'Already have an account? Sign In'
-              : "Don't have an account yet? Create One"}
+              ? 'Already registered? Sign In with Username'
+              : "Need an account? Create One with Secure Email OTP"}
           </button>
         </div>
       </div>

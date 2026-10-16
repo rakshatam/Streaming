@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Play, Radio, Star, Eye } from 'lucide-react';
+import { Play, Radio, Star } from 'lucide-react';
 import { Video } from '../types';
 
 interface VideoCardProps {
@@ -20,12 +20,6 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
     const mins = Math.floor(secs / 60);
     const remSecs = secs % 60;
     return `${mins}:${remSecs < 10 ? '0' : ''}${remSecs}`;
-  };
-
-  const formatViews = (views: number) => {
-    if (views >= 1000000) return `${(views / 1000000).toFixed(1)}M`;
-    if (views >= 1000) return `${(views / 1000).toFixed(1)}k`;
-    return views.toString();
   };
 
   return (
@@ -74,11 +68,6 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
           </div>
         </div>
 
-        {/* View Count */}
-        <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-slate-300 text-[10px]">
-          <Eye className="w-3 h-3" />
-          <span>{formatViews(video.views_count)}</span>
-        </div>
       </div>
 
       {/* Video Details */}

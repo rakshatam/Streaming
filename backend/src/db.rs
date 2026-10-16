@@ -1,9 +1,6 @@
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::time::Duration;
 use tracing::info;
-use uuid::Uuid;
-
-use crate::security::hash_password;
 
 pub type DbPool = Pool<Sqlite>;
 
@@ -72,6 +69,35 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
             FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS video_likes (
+            user_id TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, video_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS video_ratings (
+            user_id TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, video_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS email_otps (
+            email TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            otp_code TEXT NOT NULL,
+            attempts_left INTEGER NOT NULL DEFAULT 5,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_videos USING fts5(
             video_id UNINDEXED,
             title,
@@ -91,26 +117,6 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
 }
 
 async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
-    // Seed default demo account if not exists
-    let demo_exists: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = 'demo'")
-        .fetch_optional(pool)
-        .await?;
-
-    if demo_exists.is_none() {
-        if let Ok(hashed_pw) = hash_password("demo123") {
-            let demo_id = Uuid::new_v4().to_string();
-            let now = chrono::Utc::now().timestamp();
-            let _ = sqlx::query(
-                "INSERT OR IGNORE INTO users (id, username, email, password_hash, role, created_at) VALUES (?, 'demo', 'demo@streamflow.io', ?, 'user', ?)"
-            )
-            .bind(&demo_id)
-            .bind(&hashed_pw)
-            .bind(now)
-            .execute(pool)
-            .await;
-            info!("Demo account seeded: username: demo, password: demo123");
-        }
-    }
 
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM videos")
         .fetch_one(pool)

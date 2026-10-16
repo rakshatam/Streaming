@@ -13,10 +13,11 @@ import {
   Shield,
   Activity,
   X,
-  RotateCcw,
   Radio,
   Sliders,
   Check,
+  Heart,
+  Star,
 } from 'lucide-react';
 import { Video } from '../types';
 
@@ -41,6 +42,15 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   const [showSettings, setShowSettings] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
+  // User Rating & Like State
+  const [likesCount, setLikesCount] = useState<number>(0);
+  const [hasLiked, setHasLiked] = useState<boolean>(false);
+  const [userRating, setUserRating] = useState<number | null>(null);
+  const [avgRating, setAvgRating] = useState<number>(video?.rating || 4.8);
+  const [totalRatings, setTotalRatings] = useState<number>(0);
+  const [hoverRating, setHoverRating] = useState<number | null>(null);
+  const [interactionToast, setInteractionToast] = useState<string | null>(null);
+
   // Stream Quality Ladder
   const [qualities, setQualities] = useState<{ id: number; height: number; bitrate: number }[]>([]);
   const [selectedQuality, setSelectedQuality] = useState<number>(-1); // -1 = Auto
@@ -63,6 +73,85 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     controlsTimeoutRef.current = setTimeout(() => {
       if (isPlaying) setShowControls(false);
     }, 3500);
+  };
+
+  // Fetch initial interactions (likes & ratings)
+  useEffect(() => {
+    if (!video) return;
+    const token = localStorage.getItem('streamflow_token');
+    const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+
+    fetch(`/api/videos/${video.id}/interactions`, { headers })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) {
+          setLikesCount(data.likes_count);
+          setHasLiked(data.has_liked);
+          setUserRating(data.user_rating);
+          setAvgRating(data.average_rating);
+          setTotalRatings(data.total_ratings);
+        }
+      })
+      .catch(() => {});
+  }, [video]);
+
+  // Handle Like Toggle
+  const handleToggleLike = async () => {
+    if (!video) return;
+    const token = localStorage.getItem('streamflow_token');
+    if (!token) {
+      setInteractionToast('Please sign in to like this video');
+      setTimeout(() => setInteractionToast(null), 3500);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/videos/${video.id}/like`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setHasLiked(data.has_liked);
+        setLikesCount(data.likes_count);
+        setInteractionToast(data.has_liked ? 'Added to your liked videos!' : 'Removed like');
+        setTimeout(() => setInteractionToast(null), 2500);
+      }
+    } catch (e) {
+      console.error('Like failed', e);
+    }
+  };
+
+  // Handle 1-5 Star Rating
+  const handleRate = async (ratingVal: number) => {
+    if (!video) return;
+    const token = localStorage.getItem('streamflow_token');
+    if (!token) {
+      setInteractionToast('Please sign in to submit a rating');
+      setTimeout(() => setInteractionToast(null), 3500);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/videos/${video.id}/rate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ rating: ratingVal }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUserRating(data.user_rating);
+        setAvgRating(data.average_rating);
+        setTotalRatings(data.total_ratings);
+        setInteractionToast(`Rated ${ratingVal} ★! Thanks for your feedback.`);
+        setTimeout(() => setInteractionToast(null), 2500);
+      }
+    } catch (e) {
+      console.error('Rating failed', e);
+    }
   };
 
   // Initialize Hls.js & Load Rewritten Stream from Rust Backend
@@ -240,7 +329,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     setShowSettings(false);
   };
 
-  // Keyboard Navigation (Space = Play/Pause, M = Mute, F = Fullscreen, D = HUD, Esc = Close)
+  // Keyboard Navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -297,6 +386,13 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         onMouseMove={handleMouseMove}
         className="relative w-full h-full max-w-7xl max-h-[90vh] sm:rounded-3xl overflow-hidden bg-black shadow-2xl flex flex-col justify-center"
       >
+        {/* Toast Feedback */}
+        {interactionToast && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-xl bg-red-600/95 text-white font-semibold text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-2">
+            {interactionToast}
+          </div>
+        )}
+
         {/* Video Element */}
         <video
           ref={videoRef}
@@ -335,7 +431,50 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          {/* Right Header: Like Button, 5-Star Ratings, and Telemetry */}
+          <div className="flex items-center space-x-2 sm:space-x-3">
+            {/* Interactive Like Button */}
+            <button
+              onClick={handleToggleLike}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                hasLiked
+                  ? 'bg-rose-600/20 border-rose-500 text-rose-400'
+                  : 'bg-white/10 hover:bg-white/20 border-white/10 text-slate-300 hover:text-white'
+              }`}
+              title="Like this video"
+            >
+              <Heart className={`w-4 h-4 ${hasLiked ? 'fill-current text-rose-500' : ''}`} />
+              <span>{likesCount}</span>
+            </button>
+
+            {/* Interactive 1-5 Star Rating Selector */}
+            <div className="hidden md:flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-white/10 border border-white/10 text-xs">
+              <span className="text-amber-400 font-bold mr-1">{avgRating}★</span>
+              <div className="flex items-center">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => handleRate(star)}
+                    onMouseEnter={() => setHoverRating(star)}
+                    onMouseLeave={() => setHoverRating(null)}
+                    className="p-0.5 hover:scale-125 transition-transform"
+                    title={`Rate ${star} Stars`}
+                  >
+                    <Star
+                      className={`w-3.5 h-3.5 ${
+                        (hoverRating !== null ? star <= hoverRating : userRating !== null ? star <= userRating : star <= Math.round(avgRating))
+                          ? 'fill-amber-400 text-amber-400'
+                          : 'text-slate-500'
+                      }`}
+                    />
+                  </button>
+                ))}
+              </div>
+              {userRating && (
+                <span className="text-[10px] text-emerald-400 font-medium ml-1">Rated</span>
+              )}
+            </div>
+
             <button
               onClick={() => setShowDiagnostics((p) => !p)}
               className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
@@ -371,12 +510,20 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
               <span className="text-emerald-400 font-semibold">{hudStats.bufferAheadSecs}s</span>
             </div>
             <div className="flex justify-between">
+              <span>Rating:</span>
+              <span className="text-amber-400 font-semibold">{avgRating} ★ ({totalRatings} votes)</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Likes:</span>
+              <span className="text-rose-400 font-semibold">{likesCount} likes</span>
+            </div>
+            <div className="flex justify-between">
               <span>Rust Gateway:</span>
               <span className="text-indigo-400 font-semibold">Axum Tokio Proxy</span>
             </div>
             <div className="flex justify-between">
               <span>Cryptographic Auth:</span>
-              <span className="text-amber-400 font-semibold">HMAC-SHA256 Valid</span>
+              <span className="text-emerald-400 font-semibold">HMAC-SHA256 Valid</span>
             </div>
           </div>
         )}
