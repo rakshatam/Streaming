@@ -26,6 +26,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [metrics, setMetrics] = useState<StreamMetrics | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [cacheToast, setCacheToast] = useState<string | null>(null);
+  const toastTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
+  }, []);
 
   const handleClearCache = async () => {
     setIsClearingCache(true);
@@ -44,7 +51,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       setCacheToast('Cache clear failed');
     } finally {
       setIsClearingCache(false);
-      setTimeout(() => setCacheToast(null), 3000);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = setTimeout(() => setCacheToast(null), 3000);
     }
   };
 

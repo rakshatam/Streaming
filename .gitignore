@@ -21,3 +21,6 @@ server.pid
 Thumbs.db
 .vscode/
 .idea/
+
+# Local maintenance guide
+STORAGE_AND_MAINTENANCE.md

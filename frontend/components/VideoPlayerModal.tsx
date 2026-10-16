@@ -19,6 +19,8 @@ import {
   Heart,
   Star,
   Trash2,
+  AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { Video } from '../types';
 import { apiUrl } from '../lib/api';
@@ -102,7 +104,23 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     droppedFrames: 0,
   });
 
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState<number>(0);
+
+  const handleRetryPlayback = () => {
+    setPlaybackError(null);
+    setRetryCount((p) => p + 1);
+  };
+
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleMouseMove = () => {
     setShowControls(true);
@@ -278,6 +296,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
               break;
             default:
               hls.destroy();
+              setPlaybackError('The video stream encountered an unrecoverable decoding error or network interruption.');
               break;
           }
         }
@@ -294,7 +313,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         hlsRef.current = null;
       }
     };
-  }, [video]);
+  }, [video, retryCount]);
 
   // Video Time & Buffer Update
   const handleTimeUpdate = () => {
@@ -598,8 +617,28 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
           </div>
         )}
 
+        {/* Playback Error Overlay */}
+        {playbackError && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/85 backdrop-blur-md p-6 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <AlertCircle className="w-7 h-7" />
+            </div>
+            <div className="space-y-1 max-w-md">
+              <h3 className="text-white font-bold text-lg">Stream Unavailable</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">{playbackError}</p>
+            </div>
+            <button
+              onClick={handleRetryPlayback}
+              className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold text-xs transition-all shadow-lg shadow-red-600/30 active:scale-95"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Retry Playback</span>
+            </button>
+          </div>
+        )}
+
         {/* Center Play Button Overlay When Paused */}
-        {!isPlaying && (
+        {!isPlaying && !playbackError && (
           <div
             onClick={togglePlay}
             className="absolute inset-0 flex items-center justify-center cursor-pointer pointer-events-auto"

@@ -43,7 +43,8 @@ impl Config {
         load_dotenv_if_present();
 
         let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let server_port = env::var("SERVER_PORT")
+        let server_port = env::var("PORT")
+            .or_else(|_| env::var("SERVER_PORT"))
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(8080);

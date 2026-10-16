@@ -82,7 +82,7 @@ pub fn sign_stream_token(target_uri: &str, expires_at: u64, secret: &str) -> Str
     hex::encode(result.into_bytes())
 }
 
-/// Verifies HMAC-SHA256 signature and checks expiry
+/// Verifies HMAC-SHA256 signature using constant-time comparison and checks expiry
 pub fn verify_stream_token(target_uri: &str, expires_at: u64, signature: &str, secret: &str) -> bool {
     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs(),
@@ -94,7 +94,16 @@ pub fn verify_stream_token(target_uri: &str, expires_at: u64, signature: &str, s
         return false;
     }
 
-    let expected_sig = sign_stream_token(target_uri, expires_at, secret);
-    // Constant time comparison
-    expected_sig == signature
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    let payload = format!("{}:{}", target_uri, expires_at);
+    mac.update(payload.as_bytes());
+
+    let Ok(provided_bytes) = hex::decode(signature) else {
+        return false;
+    };
+
+    // Constant-time verification provided by hmac::Mac trait
+    mac.verify_slice(&provided_bytes).is_ok()
 }

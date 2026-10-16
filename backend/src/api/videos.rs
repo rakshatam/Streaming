@@ -277,26 +277,19 @@ pub async fn toggle_like(
         )
     })?;
 
-    let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT video_id FROM video_likes WHERE user_id = ? AND video_id = ?"
-    )
-    .bind(&user_id)
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?;
+    let deleted = sqlx::query("DELETE FROM video_likes WHERE user_id = ? AND video_id = ?")
+        .bind(&user_id)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?
+        .rows_affected();
 
-    let has_liked = if existing.is_some() {
-        sqlx::query("DELETE FROM video_likes WHERE user_id = ? AND video_id = ?")
-            .bind(&user_id)
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?;
+    let has_liked = if deleted > 0 {
         false
     } else {
         let now = chrono::Utc::now().timestamp();
-        sqlx::query("INSERT INTO video_likes (user_id, video_id, created_at) VALUES (?, ?, ?)")
+        let _ = sqlx::query("INSERT OR IGNORE INTO video_likes (user_id, video_id, created_at) VALUES (?, ?, ?)")
             .bind(&user_id)
             .bind(&id)
             .bind(now)

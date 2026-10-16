@@ -105,24 +105,31 @@ pub async fn get_segment(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    let (bytes, content_type, is_cached) = state
+    let seg = state
         .stream_engine
         .fetch_segment(&params.uri, client_range)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Segment fetch failed: {}", e)))?;
 
-    let cache_status = if is_cached { "HIT" } else { "MISS" };
+    let cache_status = if seg.is_cached { "HIT" } else { "MISS" };
+    let status_code = StatusCode::from_u16(seg.status).unwrap_or(StatusCode::OK);
 
-    let resp = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CONTENT_LENGTH, bytes.len().to_string())
+    let mut builder = Response::builder()
+        .status(status_code)
+        .header(header::CONTENT_TYPE, seg.content_type)
+        .header(header::CONTENT_LENGTH, seg.bytes.len().to_string())
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "public, max-age=86400, immutable")
         .header("X-Cache", cache_status)
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header("X-Content-Type-Options", "nosniff")
-        .body(axum::body::Body::from(bytes))
+        .header("X-Content-Type-Options", "nosniff");
+
+    if let Some(ref range) = seg.content_range {
+        builder = builder.header(header::CONTENT_RANGE, range);
+    }
+
+    let resp = builder
+        .body(axum::body::Body::from(seg.bytes))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(resp)

@@ -9,10 +9,19 @@ use url::Url;
 
 use crate::security::{sign_stream_token, verify_stream_token};
 
+#[derive(Debug, Clone)]
+pub struct SegmentData {
+    pub bytes: Bytes,
+    pub content_type: String,
+    pub is_cached: bool,
+    pub status: u16,
+    pub content_range: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct StreamEngine {
     client: reqwest::Client,
-    segment_cache: Cache<String, Bytes>,
+    segment_cache: Cache<String, SegmentData>,
     manifest_cache: Cache<String, String>,
     hmac_secret: String,
     token_validity_secs: u64,
@@ -30,7 +39,8 @@ impl StreamEngine {
             .pool_idle_timeout(Duration::from_secs(120))
             .tcp_nodelay(true)
             .tcp_keepalive(Duration::from_secs(30))
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(25))
             .danger_accept_invalid_certs(true) // Resilience against varied upstream CDNs
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .build()
@@ -39,7 +49,7 @@ impl StreamEngine {
         let max_capacity_bytes = cache_mb * 1024 * 1024;
         let segment_cache = Cache::builder()
             .max_capacity(max_capacity_bytes)
-            .weigher(|_key, value: &Bytes| value.len() as u32)
+            .weigher(|_key, value: &SegmentData| value.bytes.len() as u32)
             .time_to_live(Duration::from_secs(300)) // 5 minutes TTL for segments
             .time_to_idle(Duration::from_secs(120))
             .build();
@@ -77,6 +87,12 @@ impl StreamEngine {
     /// Returns the current number of cached manifests and segments
     pub fn cache_entry_counts(&self) -> (u64, u64) {
         (self.manifest_cache.entry_count(), self.segment_cache.entry_count())
+    }
+
+    /// Directly inserts a segment for cache testing and runs eviction maintenance tasks
+    pub async fn insert_segment_for_testing(&self, key: &str, data: SegmentData) {
+        self.segment_cache.insert(key.to_string(), data).await;
+        self.segment_cache.run_pending_tasks().await;
     }
 
     /// Resets cache hit/miss counters
@@ -124,10 +140,20 @@ impl StreamEngine {
             return Err(format!("Upstream returned HTTP status {}", response.status()));
         }
 
+        if let Some(len) = response.content_length() {
+            if len > 5 * 1024 * 1024 {
+                return Err("Upstream manifest exceeds maximum allowed size of 5MB".to_string());
+            }
+        }
+
         let raw_m3u8 = response
             .text()
             .await
             .map_err(|e| format!("Failed to read upstream manifest body: {}", e))?;
+
+        if raw_m3u8.len() > 5 * 1024 * 1024 {
+            return Err("Upstream manifest body exceeds 5MB limit".to_string());
+        }
 
         let mut rewritten = String::with_capacity(raw_m3u8.len() + 4096);
 
@@ -215,7 +241,7 @@ impl StreamEngine {
         &self,
         segment_url: &str,
         client_range: Option<String>,
-    ) -> Result<(Bytes, String, bool), String> {
+    ) -> Result<SegmentData, String> {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
         let cache_key = match &client_range {
@@ -224,18 +250,22 @@ impl StreamEngine {
         };
 
         // 1. Check in-memory cache
-        if let Some(cached_bytes) = self.segment_cache.get(&cache_key).await {
+        if let Some(cached) = self.segment_cache.get(&cache_key).await {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
-            self.bytes_streamed.fetch_add(cached_bytes.len() as u64, Ordering::Relaxed);
-            return Ok((cached_bytes, "video/MP2T".to_string(), true));
+            self.bytes_streamed.fetch_add(cached.bytes.len() as u64, Ordering::Relaxed);
+            return Ok(SegmentData {
+                bytes: cached.bytes.clone(),
+                content_type: cached.content_type.clone(),
+                is_cached: true,
+                status: cached.status,
+                content_range: cached.content_range.clone(),
+            });
         }
 
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
 
         // 2. Fetch from upstream
-        let mut req = self
-            .client
-            .get(segment_url);
+        let mut req = self.client.get(segment_url);
 
         if let Some(ref range) = client_range {
             if let Ok(hdr) = HeaderValue::from_str(range) {
@@ -252,6 +282,19 @@ impl StreamEngine {
             return Err(format!("Upstream segment returned HTTP {}", resp.status()));
         }
 
+        if let Some(len) = resp.content_length() {
+            if len > 35 * 1024 * 1024 {
+                return Err("Upstream segment exceeds maximum size of 35MB".to_string());
+            }
+        }
+
+        let status = resp.status().as_u16();
+        let content_range = resp
+            .headers()
+            .get("content-range")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
         let content_type = resp
             .headers()
             .get("content-type")
@@ -265,14 +308,26 @@ impl StreamEngine {
             .map_err(|e| format!("Failed to read segment bytes: {}", e))?;
 
         let byte_len = bytes.len();
+        if byte_len > 35 * 1024 * 1024 {
+            return Err("Segment payload exceeds 35MB limit".to_string());
+        }
+
         self.bytes_streamed.fetch_add(byte_len as u64, Ordering::Relaxed);
+
+        let data = SegmentData {
+            bytes: bytes.clone(),
+            content_type,
+            is_cached: false,
+            status,
+            content_range,
+        };
 
         // Cache segments up to 10MB in memory
         if byte_len <= 10 * 1024 * 1024 {
-            self.segment_cache.insert(cache_key, bytes.clone()).await;
+            self.segment_cache.insert(cache_key, data.clone()).await;
         }
 
-        Ok((bytes, content_type, false))
+        Ok(data)
     }
 }
 

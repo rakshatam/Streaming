@@ -1,25 +1,33 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    Pool, Sqlite,
+};
+use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
 
 pub type DbPool = Pool<Sqlite>;
 
 pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
+    let connect_opts = SqliteConnectOptions::from_str(database_url)?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .foreign_keys(true)
+        .busy_timeout(Duration::from_secs(5));
+
     let pool = SqlitePoolOptions::new()
         .max_connections(20)
         .min_connections(2)
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Duration::from_secs(600))
-        .connect(database_url)
+        .connect_with(connect_opts)
         .await?;
 
-    // Enable concurrency PRAGMAs & strict foreign keys, tuned for low memory (Render free tier)
-    sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await?;
-    sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
-    sqlx::query("PRAGMA foreign_keys = ON;").execute(&pool).await?;
-    sqlx::query("PRAGMA cache_size = -16000;").execute(&pool).await?; // 16 MB page cache
-    sqlx::query("PRAGMA mmap_size = 67108864;").execute(&pool).await?; // 64 MB memory-mapped I/O
-    sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await?;
+    // Enable memory & cache optimizations
+    let _ = sqlx::query("PRAGMA cache_size = -16000;").execute(&pool).await;
+    let _ = sqlx::query("PRAGMA mmap_size = 67108864;").execute(&pool).await;
+    let _ = sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await;
 
     // Create tables
     sqlx::query(

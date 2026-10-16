@@ -124,7 +124,7 @@ pub async fn register(
     let now = chrono::Utc::now().timestamp();
 
     // 5. Insert user record
-    sqlx::query(
+    let insert_result = sqlx::query(
         r#"
         INSERT INTO users (id, username, password_hash, role, created_at)
         VALUES (?, ?, ?, 'user', ?)
@@ -135,8 +135,23 @@ pub async fn register(
     .bind(&password_hash)
     .bind(now)
     .execute(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
+    .await;
+
+    if let Err(e) = insert_result {
+        let err_msg = e.to_string();
+        if err_msg.contains("UNIQUE constraint failed") || err_msg.contains("unique constraint") {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(AuthError {
+                    message: "This username is already taken. Please choose another username.".into(),
+                }),
+            ));
+        }
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthError { message: err_msg }),
+        ));
+    }
 
     info!("Registered user: '{}' ({})", username, user_id);
 

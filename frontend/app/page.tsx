@@ -9,7 +9,7 @@ import { SearchModal } from '../components/SearchModal';
 import { AuthModal } from '../components/AuthModal';
 import { Video, User } from '../types';
 import { apiUrl } from '../lib/api';
-import { Radio, Film, Compass, ShieldCheck, Trophy, Newspaper, Sparkles, Tv } from 'lucide-react';
+import { Radio, Film, Compass, ShieldCheck, Trophy, Newspaper, Sparkles, Tv, RotateCcw } from 'lucide-react';
 
 export default function Home() {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -19,25 +19,33 @@ export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogRetry, setCatalogRetry] = useState<number>(0);
 
   // Fetch initial videos
   useEffect(() => {
+    let isCancelled = false;
     const fetchVideos = async () => {
+      setIsLoading(true);
+      setCatalogError(null);
       try {
         const res = await fetch(apiUrl('/api/videos'));
         if (res.ok) {
           const data = await res.json();
-          setVideos(data);
+          if (!isCancelled) setVideos(data);
+        } else {
+          if (!isCancelled) setCatalogError(`Backend returned status ${res.status}`);
         }
-      } catch (err) {
-        console.error('Failed to fetch videos:', err);
+      } catch (err: any) {
+        if (!isCancelled) setCatalogError(err.message || 'Unable to connect to streaming backend');
       } finally {
-        setIsLoading(false);
+        if (!isCancelled) setIsLoading(false);
       }
     };
 
     fetchVideos();
-  }, []);
+    return () => { isCancelled = true; };
+  }, [catalogRetry]);
 
   // Check saved session
   useEffect(() => {
@@ -103,12 +111,32 @@ export default function Home() {
           currentUser={currentUser}
         />
 
+        {/* Connection Failure Recovery */}
+        {catalogError && videos.length === 0 && (
+          <div className="max-w-md mx-auto my-32 p-8 rounded-3xl bg-white/5 border border-white/10 text-center space-y-4">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <RotateCcw className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-lg font-bold text-white">Stream Catalog Offline</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">{catalogError}</p>
+            </div>
+            <button
+              onClick={() => setCatalogRetry((p) => p + 1)}
+              className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold text-xs transition-all shadow-lg shadow-red-600/30"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
+
         {/* Hero Banner Spotlight */}
-        {selectedCategory === 'All' && (
+        {selectedCategory === 'All' && !catalogError && (
           <HeroBanner video={featuredVideo} onPlay={(v) => setActiveVideo(v)} />
         )}
 
         {/* Main Content Sections */}
+        {videos.length > 0 && (
         <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12 pb-24 ${selectedCategory !== 'All' ? 'pt-24' : '-mt-10 relative z-20'}`}>
           {selectedCategory !== 'All' ? (
             /* Filtered Category Grid */
@@ -248,6 +276,7 @@ export default function Home() {
             </>
           )}
         </div>
+        )}
       </div>
 
       {/* Footer */}

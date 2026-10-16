@@ -131,26 +131,19 @@ pub async fn toggle_bookmark(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let user_id = extract_user_id(&headers, &state.config.jwt_secret)?;
 
-    let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT video_id FROM bookmarks WHERE user_id = ? AND video_id = ?"
-    )
-    .bind(&user_id)
-    .bind(&payload.video_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let deleted = sqlx::query("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?")
+        .bind(&user_id)
+        .bind(&payload.video_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .rows_affected();
 
-    let is_bookmarked = if existing.is_some() {
-        sqlx::query("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?")
-            .bind(&user_id)
-            .bind(&payload.video_id)
-            .execute(&state.db)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let is_bookmarked = if deleted > 0 {
         false
     } else {
         let now = chrono::Utc::now().timestamp();
-        sqlx::query("INSERT INTO bookmarks (user_id, video_id, created_at) VALUES (?, ?, ?)")
+        let _ = sqlx::query("INSERT OR IGNORE INTO bookmarks (user_id, video_id, created_at) VALUES (?, ?, ?)")
             .bind(&user_id)
             .bind(&payload.video_id)
             .bind(now)
