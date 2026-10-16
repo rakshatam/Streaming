@@ -175,11 +175,11 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
         ),
         (
             "nasa-tv-hd",
-            "NASA TV HD Live Stream",
-            "Live coverage of rocket launches, International Space Station missions, spacewalks, deep space discoveries, and astronomical events in 1080p HD.",
+            "Space Exploration HD (NASA & Deep Space Missions)",
+            "Live continuous coverage of deep space exploration, planetary discoveries, rocket launches, spacewalks, and astronomical observations.",
             "Science",
-            "1080p 60fps",
-            "https://ntv1.akamaized.net/hls/live/2014075/NASA-NTV1-HLS/master.m3u8",
+            "1080p HD",
+            "https://streams2.sofast.tv/v1/master/611d79b11b77e2f571934fd80ca1413453772ac7/18d329ef-d478-413c-b68f-c123494ac434/manifest.m3u8",
             "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&q=80",
             "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=1600&q=85",
             0,
@@ -187,7 +187,7 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
             1, // featured
             560200,
             5.0,
-            "space, nasa, live, iss, science, astronomy, rocket, mars"
+            "space, nasa, live, iss, science, astronomy, rocket, mars, cosmos"
         ),
         (
             "red-bull-tv-hd",

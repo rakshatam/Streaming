@@ -97,7 +97,6 @@ impl StreamEngine {
         let response = self
             .client
             .get(upstream_url)
-            .header("Referer", upstream_url)
             .send()
             .await
             .map_err(|e| format!("Failed to fetch upstream manifest: {}", e))?;
@@ -217,8 +216,7 @@ impl StreamEngine {
         // 2. Fetch from upstream
         let mut req = self
             .client
-            .get(segment_url)
-            .header("Referer", segment_url);
+            .get(segment_url);
 
         if let Some(ref range) = client_range {
             if let Ok(hdr) = HeaderValue::from_str(range) {
