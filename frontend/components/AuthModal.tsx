@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, Lock, User, ShieldCheck, ArrowRight, CheckCircle2, UserPlus } from 'lucide-react';
 import { User as UserType } from '../types';
+import { apiUrl } from '../lib/api';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -51,7 +52,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     setIsLoading(true);
 
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUsername, password }),
@@ -89,7 +90,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     setIsLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password }),

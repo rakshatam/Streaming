@@ -21,6 +21,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Video } from '../types';
+import { apiUrl } from '../lib/api';
 
 interface QualityLevel {
   id: number;
@@ -117,7 +118,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     const token = localStorage.getItem('streamflow_token');
     const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
-    fetch(`/api/videos/${video.id}/interactions`, { headers })
+    fetch(apiUrl(`/api/videos/${video.id}/interactions`), { headers })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) {
@@ -142,7 +143,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     }
 
     try {
-      const res = await fetch(`/api/videos/${video.id}/like`, {
+      const res = await fetch(apiUrl(`/api/videos/${video.id}/like`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -169,7 +170,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     }
 
     try {
-      const res = await fetch(`/api/videos/${video.id}/rate`, {
+      const res = await fetch(apiUrl(`/api/videos/${video.id}/rate`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -194,7 +195,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   const handleClearCache = async () => {
     setClearingCache(true);
     try {
-      const res = await fetch('/api/cache/clear', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/cache/clear'), { method: 'POST' });
       if (res.ok) {
         setInteractionToast('Stream cache cleared successfully');
       } else {
@@ -212,7 +213,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   useEffect(() => {
     if (!video || !videoRef.current) return;
 
-    const streamManifestUrl = `/api/stream/manifest/${video.id}`;
+    const streamManifestUrl = apiUrl(`/api/stream/manifest/${video.id}`);
     const videoEl = videoRef.current;
 
     if (Hls.isSupported()) {

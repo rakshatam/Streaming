@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Shield, Zap, User as UserIcon, Activity, Radio, Film, LogOut, Trash2 } from 'lucide-react';
 import { StreamMetrics, User } from '../types';
+import { apiUrl } from '../lib/api';
 
 interface NavbarProps {
   onSearchClick: () => void;
@@ -29,10 +30,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const handleClearCache = async () => {
     setIsClearingCache(true);
     try {
-      const res = await fetch('/api/cache/clear', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/cache/clear'), { method: 'POST' });
       if (res.ok) {
         setCacheToast('Cache cleared successfully');
-        const mRes = await fetch('/api/metrics');
+        const mRes = await fetch(apiUrl('/api/metrics'));
         if (mRes.ok) {
           setMetrics(await mRes.json());
         }
@@ -58,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const res = await fetch('/api/metrics');
+        const res = await fetch(apiUrl('/api/metrics'));
         if (res.ok) {
           const data = await res.json();
           setMetrics(data);

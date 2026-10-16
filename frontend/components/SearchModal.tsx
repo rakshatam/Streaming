@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, Play, Radio, Star, Film } from 'lucide-react';
 import { Video } from '../types';
+import { apiUrl } from '../lib/api';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -38,7 +39,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     const timer = setTimeout(async () => {
       setIsLoading(true);
       try {
-        const res = await fetch(`/api/videos/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(apiUrl(`/api/videos/search?q=${encodeURIComponent(query)}`));
         if (res.ok) {
           const data = await res.json();
           setResults(data);

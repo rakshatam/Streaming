@@ -8,6 +8,7 @@ import { VideoPlayerModal } from '../components/VideoPlayerModal';
 import { SearchModal } from '../components/SearchModal';
 import { AuthModal } from '../components/AuthModal';
 import { Video, User } from '../types';
+import { apiUrl } from '../lib/api';
 import { Radio, Film, Compass, ShieldCheck, Trophy, Newspaper, Sparkles, Tv } from 'lucide-react';
 
 export default function Home() {
@@ -23,7 +24,7 @@ export default function Home() {
   useEffect(() => {
     const fetchVideos = async () => {
       try {
-        const res = await fetch('/api/videos');
+        const res = await fetch(apiUrl('/api/videos'));
         if (res.ok) {
           const data = await res.json();
           setVideos(data);
@@ -42,7 +43,7 @@ export default function Home() {
   useEffect(() => {
     const token = localStorage.getItem('streamflow_token');
     if (token) {
-      fetch('/api/auth/me', {
+      fetch(apiUrl('/api/auth/me'), {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((res) => (res.ok ? res.json() : null))
