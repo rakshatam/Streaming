@@ -1,8 +1,6 @@
 # StreamFlow
 
-StreamFlow is a memory-bounded video streaming proxy and web application built with Rust and Next.js. It implements HMAC-SHA256 signed URL verification, dynamic HLS manifest rewriting, bounded in-memory segment caching, SQLite metadata storage with full-text search, and a static Next.js client interface.
-
-The service is configured to operate within restricted environments, including Render free tier containers (512 MB RAM, 0.1 vCPU) and GitHub Pages static hosting.
+StreamFlow is a memory-bounded video streaming proxy and web application built with Rust and Next.js. It implements HMAC-SHA256 signed URL verification, dynamic HLS manifest rewriting, bounded in-memory segment caching, SQLite metadata storage with full-text search, and a Next.js client interface.
 
 ---
 
@@ -10,22 +8,24 @@ The service is configured to operate within restricted environments, including R
 
 ```
 +-------------------------------------------------------------------------------+
-|                                DEPLOYMENT TOPOLOGY                            |
+|                                SYSTEM TOPOLOGY                                |
 +-------------------------------------------------------------------------------+
 
   [ Web Browser ]
          |
-         |  1. HTTPS (Static HTML / JS / CSS bundle)
+         |  1. HTTP/HTTPS (Port 3000)
          v
   +-----------------------------+
-  |        GitHub Pages         |
-  |  (Next.js Static Export)    |
+  |      Next.js Frontend       |
+  |  - Player & Telemetry HUD   |
+  |  - Catalog & Search Views   |
+  |  - Authentication Modals    |
   +-----------------------------+
          |
-         |  2. API Requests / HLS Streams (CORS enabled)
+         |  2. REST API / Streaming Proxy (Port 8080)
          v
   +-----------------------------------------------------------------------------+
-  |                          Render Free Tier Container                         |
+  |                          StreamFlow Rust Backend                            |
   |                                                                             |
   |  +-----------------------------------------------------------------------+  |
   |  |                         Rust Axum HTTP Server                         |  |
@@ -120,33 +120,35 @@ Client (Browser / Hls.js)               StreamFlow Rust Core               Upstr
 
 ### 2. Frontend Application (Next.js & TypeScript)
 - **Framework:** Next.js 14 (App Router) with React 18 and TypeScript.
-- **Static Export:** Configured with `output: 'export'` and `images: { unoptimized: true }` in `next.config.mjs` to produce a static site deployable on GitHub Pages.
-- **Dynamic API Routing:** `frontend/lib/api.ts` dynamically points to `NEXT_PUBLIC_API_URL` when deployed to static hosts, falling back to relative paths for local development.
+- **Dynamic API Routing:** `frontend/lib/api.ts` resolves backend endpoints, defaulting to relative `/api/*` paths proxied by Next.js rewrites in local development.
 - **Player & Telemetry:**
   - Integrated `hls.js` video player supporting adaptive bitrate streaming, resolution ladder switching, and buffer health tracking.
   - Telemetry HUD reporting real-time resolution, bitrate, buffer status, and in-player cache purge controls.
 - **Styling & Assets:** Tailwind CSS with Lucide icons.
 
-### 3. Containerization & Deployment
+### 3. Containerization & CI/CD
 - **Docker Multi-Stage Build:** `Dockerfile.backend` compiles in `rust:1.80-slim-bookworm` and copies the stripped release binary to a minimal `debian:bookworm-slim` image (~85 MB total container footprint).
-- **GitHub Actions Workflow:** `.github/workflows/deploy-pages.yml` automates static bundle generation and deployment to GitHub Pages.
-- **Render Blueprint:** `render.yaml` defines the web service configuration with environment variables, health checks, and resource constraints for Render free tier.
+- **Docker Compose:** `docker-compose.yml` orchestrates backend and frontend containers with isolated bridge networking and volume persistence.
+- **GitHub Actions Workflow:** `.github/workflows/ci.yml` runs Rust check, unit/integration tests, Next.js build, throughput benchmark, and multi-stage Docker build validation on every push.
 
 ---
 
-## Render Free Tier Resource Benchmarks (512 MB RAM, 0.1 vCPU)
+## Throughput & Memory Benchmark Results
 
-The backend was tested using `benchmark_render.py` on the compiled release binary under a simulated workload of 20 concurrent workers executing 300 requests across 115 stream and catalog endpoints.
+Automated stress testing executed via `scripts/throughput_benchmark.py` and `benchmark_render.py`:
 
-| Metric | Measured Value | Render Free Tier Cap | Status |
-| :--- | :--- | :--- | :--- |
-| **Idle Working Set (RAM)** | 9.79 MB | 512 MB | 98.1% free headroom |
-| **Peak Working Set Under Load** | 21.21 MB | 512 MB | 95.9% free headroom |
-| **Private Memory Bytes** | 11.52 MB | 512 MB | Within threshold |
-| **CPU Time Consumed** | 0.360 s (over 2.35 s elapsed) | 0.1 vCPU limit | Non-blocking async I/O |
-| **Throughput** | 127.9 req/s | — | 100% success rate (0 errors) |
-| **Median Response Latency** | 2.81 ms | — | In-memory cache hit |
-| **Cache Clear Result** | Cache entries reset to 0 | — | Immediate memory release |
+| Test Suite | Concurrency | Requests | Requests/Sec (RPS) | Avg Latency | P95 Latency | Success Rate |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **API Health & Telemetry** | 20 | 200 | **956.0 RPS** | 15.40 ms | 25.86 ms | **100.0%** |
+| **Catalog Listing (SQLite WAL)** | 15 | 150 | **1005.0 RPS** | 13.55 ms | 20.22 ms | **100.0%** |
+| **FTS5 Full-Text Search ('space')** | 10 | 100 | **1022.5 RPS** | 8.76 ms | 13.19 ms | **100.0%** |
+| **M3U8 Manifest Rewriter & HMAC Signer** | 5 | 50 | **45.6 RPS** | 108.97 ms | 1016.99 ms | **100.0%** |
+
+### Memory Footprint Metrics
+- **Idle Working Set (RAM):** 9.79 MB
+- **Peak Working Set (20 concurrent threads):** 21.21 MB
+- **Private Memory:** 11.52 MB
+- **Cache Purge:** Calling `POST /api/cache/clear` invalidates all cached segments and manifests immediately.
 
 ---
 
@@ -178,6 +180,7 @@ The backend was tested using `benchmark_render.py` on the compiled release binar
 ### Prerequisites
 - Rust 1.80+ (`cargo`, `rustc`)
 - Node.js 20+ (`npm`)
+- Docker (optional, for containerized run)
 
 ### 1. Run Backend
 ```bash
@@ -192,7 +195,7 @@ cd frontend
 npm install
 npm run dev
 ```
-The frontend starts on `http://localhost:3000` and proxies `/api/*` to `http://127.0.0.1:8080`.
+The frontend starts on `http://localhost:3000` and proxies `/api/*` requests to `http://127.0.0.1:8080`.
 
 ### 3. Run Automated Tests
 ```bash
@@ -200,28 +203,11 @@ cd backend
 cargo test
 ```
 
----
-
-## Deployment Instructions
-
-### 1. Backend on Render Free Tier
-1. Create an account on [Render.com](https://render.com).
-2. Click **New +** > **Blueprint** and connect your GitHub repository.
-3. Render reads `render.yaml` automatically:
-   - Sets runtime to Docker (`Dockerfile.backend`).
-   - Applies the Free plan (512 MB RAM, 0.1 vCPU).
-   - Configures `SEGMENT_CACHE_MB=64`.
-   - Generates unique secrets for `HMAC_SECRET` and `JWT_SECRET`.
-4. Click **Apply**. Once built, note your backend URL: `https://<service-name>.onrender.com`.
-
-### 2. Frontend on GitHub Pages
-1. On GitHub, navigate to your repository > **Settings** > **Pages**.
-2. Under **Build and deployment** > **Source**, choose **GitHub Actions**.
-3. Navigate to **Settings** > **Secrets and variables** > **Actions** > **Variables** tab.
-4. Add a variable:
-   - **Name:** `NEXT_PUBLIC_API_URL`
-   - **Value:** `https://<service-name>.onrender.com`
-5. Push to `main` or `master`. The workflow in `.github/workflows/deploy-pages.yml` builds the static export and deploys to `https://<username>.github.io/<repo-name>/`.
+### 4. Run with Docker Compose
+```bash
+docker compose up --build
+```
+This starts both the Rust backend (`http://localhost:8080`) and the Next.js frontend (`http://localhost:3000`) in isolated containers.
 
 ---
 

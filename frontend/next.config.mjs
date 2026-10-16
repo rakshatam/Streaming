@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const isStaticExport = process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const isStaticExport = process.env.STATIC_EXPORT === 'true';
 
 const nextConfig = {
   reactStrictMode: true,
