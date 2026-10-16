@@ -28,14 +28,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("Starting StreamFlow Enterprise Video Streaming Engine...");
+    info!("Starting StreamFlow video server...");
 
     let config = Arc::new(Config::from_env());
 
-    // Initialize high-performance SQLite WAL database
+    // Initialize SQLite database
     let db = db::init_db(&config.database_url).await?;
 
-    // Initialize streaming engine with LRU segment cache
+    // Initialize streaming engine with segment cache
     let stream_engine = StreamEngine::new(
         config.hmac_secret.clone(),
         config.segment_cache_mb,
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        // Netflix/YouTube tier enterprise security headers
+        // Standard security headers
         .layer(SetResponseHeaderLayer::overriding(
             header::HeaderName::from_static("x-content-type-options"),
             header::HeaderValue::from_static("nosniff"),

@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'StreamFlow - Ultra High-Performance 1080p Video Streaming',
-  description: 'Next-generation video streaming platform powered by Rust, Axum, and low-latency chunked HLS delivery.',
+  title: 'StreamFlow - Video Streaming',
+  description: 'Video streaming platform built with Rust, Axum, and Next.js.',
 };
 
 export default function RootLayout({

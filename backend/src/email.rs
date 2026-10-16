@@ -73,8 +73,8 @@ pub async fn send_otp_email(
       </p>
     </div>
     <div class="footer">
-      Protected with HMAC-SHA256 and Argon2id Cryptographic Security.<br/>
-      &copy; 2026 StreamFlow Inc. High-Throughput Streaming Platform.
+      StreamFlow Video Platform<br/>
+      &copy; 2026 StreamFlow
     </div>
   </div>
 </body>

@@ -50,17 +50,17 @@ impl Config {
         let database_url = env::var("DATABASE_URL")
             .unwrap_or_else(|_| "sqlite://streamflow.db?mode=rwc".to_string());
         let hmac_secret = env::var("HMAC_SECRET")
-            .unwrap_or_else(|_| "netflix_level_streamflow_ultra_secure_hmac_secret_key_2026".to_string());
+            .unwrap_or_else(|_| "streamflow_hmac_secret_key_default".to_string());
         let jwt_secret = env::var("JWT_SECRET")
-            .unwrap_or_else(|_| "streamflow_jwt_secret_token_signing_key_super_secure".to_string());
+            .unwrap_or_else(|_| "streamflow_jwt_secret_key_default".to_string());
         let segment_cache_mb = env::var("SEGMENT_CACHE_MB")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(256); // 256MB in-memory LRU segment cache
+            .unwrap_or(256); // 256MB in-memory segment cache
         let token_validity_secs = env::var("TOKEN_VALIDITY_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(3600); // 1 hour valid stream session tokens
+            .unwrap_or(3600); // 1 hour stream session tokens
 
         let smtp_host = env::var("SMTP_HOST").ok().filter(|s| !s.trim().is_empty());
         let smtp_port = env::var("SMTP_PORT")

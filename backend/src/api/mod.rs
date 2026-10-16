@@ -29,7 +29,7 @@ pub fn create_router() -> Router<AppState> {
         .route("/api/videos/:id/interactions", get(videos::get_interactions))
         .route("/api/videos/:id/like", post(videos::toggle_like))
         .route("/api/videos/:id/rate", post(videos::rate_video))
-        // High-Throughput Stream Proxy
+        // Stream Proxy
         .route("/api/stream/manifest/:id", get(stream_routes::get_manifest))
         .route("/api/stream/playlist", get(stream_routes::get_playlist))
         .route("/api/stream/segment", get(stream_routes::get_segment))

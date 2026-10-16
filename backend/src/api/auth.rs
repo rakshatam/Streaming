@@ -53,7 +53,7 @@ struct UserRecord {
     created_at: i64,
 }
 
-/// Instant, Secure Account Registration (Pure Username + Argon2id Password)
+/// Account registration with username and password
 pub async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
@@ -123,7 +123,7 @@ pub async fn register(
     let user_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
-    // 5. Secure parameterized SQL insert
+    // 5. Insert user record
     sqlx::query(
         r#"
         INSERT INTO users (id, username, password_hash, role, created_at)
@@ -138,9 +138,9 @@ pub async fn register(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
 
-    info!("[SECURE AUTH] Registered new user account: '{}' ({})", username, user_id);
+    info!("Registered user: '{}' ({})", username, user_id);
 
-    // 6. Generate authenticated JWT token
+    // 6. Generate session token
     let token = create_jwt(&user_id, &username, "user", &state.config.jwt_secret, 7 * 86400)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
 
@@ -154,7 +154,7 @@ pub async fn register(
     Ok((StatusCode::CREATED, Json(AuthResponse { token, user: user_dto })))
 }
 
-/// Instant, Secure Account Sign In (Username + Password verified with Argon2id)
+/// Account sign in
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,

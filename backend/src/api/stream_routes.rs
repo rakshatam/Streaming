@@ -22,7 +22,7 @@ pub struct ManifestInitResponse {
     pub expires_at: u64,
 }
 
-/// Serves master M3U8 manifest with dynamic URL rewriting and cryptographic signing
+/// Serves master M3U8 manifest with rewritten URLs and signed tokens
 pub async fn get_manifest(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -89,7 +89,7 @@ pub async fn get_playlist(
     Ok(resp)
 }
 
-/// Serves individual video segments (.ts, .m4s) with LRU memory caching and byte-range seek acceleration
+/// Serves individual video segments (.ts, .m4s) with LRU memory caching and range support
 pub async fn get_segment(
     State(state): State<AppState>,
     Query(params): Query<StreamProxyQuery>,
@@ -97,7 +97,7 @@ pub async fn get_segment(
 ) -> Result<Response, (StatusCode, String)> {
     if !state.stream_engine.validate_token(&params.uri, &params.token, params.exp) {
         warn!("Unauthorized segment access attempt detected. URI: {}", params.uri);
-        return Err((StatusCode::FORBIDDEN, "Cryptographic token verification failed".to_string()));
+        return Err((StatusCode::FORBIDDEN, "Invalid or expired stream token".to_string()));
     }
 
     let client_range = headers

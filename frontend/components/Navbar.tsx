@@ -75,7 +75,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 STREAM<span className="text-red-500">FLOW</span>
               </span>
               <span className="text-[10px] tracking-widest uppercase text-slate-400 font-semibold -mt-1">
-                Rust Edge Engine
+                Streaming
               </span>
             </div>
           </div>
@@ -107,7 +107,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Actions */}
         <div className="flex items-center space-x-3 sm:space-x-4">
-          {/* Live Rust Engine Metrics Pill */}
+          {/* Live Engine Metrics Pill */}
           {metrics && (
             <div className="hidden lg:flex items-center space-x-3 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-slate-300">
               <div className="flex items-center gap-1.5">
@@ -115,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
-                <span className="font-mono text-emerald-400 font-medium">Rust 0-Copy</span>
+                <span className="font-mono text-emerald-400 font-medium">Cache</span>
               </div>
               <span className="text-slate-600">|</span>
               <div>

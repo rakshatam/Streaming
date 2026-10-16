@@ -454,8 +454,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
                 <span>•</span>
                 <span>{video.category}</span>
                 <span>•</span>
-                <span className="flex items-center gap-1 text-red-400">
-                  <Shield className="w-3 h-3" /> HMAC Token Secured
+                <span className="text-slate-400">
+                  {video.is_live === 1 ? 'Live Stream' : 'HLS'}
                 </span>
               </div>
             </div>
@@ -522,7 +522,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         {showDiagnostics && (
           <div className="absolute top-20 right-6 z-30 p-4 rounded-2xl bg-black/85 backdrop-blur-md border border-white/15 text-xs font-mono text-slate-300 space-y-2 w-72 shadow-2xl">
             <div className="flex items-center justify-between pb-1 border-b border-white/10">
-              <span className="text-red-400 font-bold uppercase tracking-wider">Stream Diagnostics</span>
+              <span className="text-red-400 font-bold uppercase tracking-wider">Stream Telemetry</span>
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             </div>
             <div className="flex justify-between">
@@ -532,7 +532,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
             <div className="flex justify-between">
               <span>Bitrate:</span>
               <span className="text-white font-semibold">
-                {hudStats.bandwidth > 0 ? `${hudStats.bandwidth} kbps` : 'Variable Bitrate'}
+                {hudStats.bandwidth > 0 ? `${hudStats.bandwidth} kbps` : 'Variable'}
               </span>
             </div>
             <div className="flex justify-between">
@@ -545,15 +545,15 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
             </div>
             <div className="flex justify-between">
               <span>Likes:</span>
-              <span className="text-rose-400 font-semibold">{likesCount} likes</span>
+              <span className="text-rose-400 font-semibold">{likesCount}</span>
             </div>
             <div className="flex justify-between">
-              <span>Rust Gateway:</span>
-              <span className="text-indigo-400 font-semibold">Axum Tokio Proxy</span>
+              <span>Delivery:</span>
+              <span className="text-indigo-400 font-semibold">Proxy</span>
             </div>
             <div className="flex justify-between">
-              <span>Cryptographic Auth:</span>
-              <span className="text-emerald-400 font-semibold">HMAC-SHA256 Valid</span>
+              <span>Token:</span>
+              <span className="text-emerald-400 font-semibold">Verified</span>
             </div>
           </div>
         )}

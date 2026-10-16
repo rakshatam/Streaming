@@ -130,7 +130,7 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            /* Netflix-Style Categorized Carousels */
+            /* Video Carousels by Category */
             <>
               {/* Row 1: Live Broadcasts */}
               {liveChannels.length > 0 && (
@@ -139,11 +139,11 @@ export default function Home() {
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
                       <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                        24/7 Live Broadcasts (1080p HD)
+                        Live Channels
                       </h2>
                     </div>
                     <span className="text-xs text-slate-400 font-medium hidden sm:inline">
-                      High-Throughput Akamai & Cloudfront Edge Streams
+                      24/7 broadcast feeds
                     </span>
                   </div>
 
@@ -255,12 +255,12 @@ export default function Home() {
           <div className="flex items-center space-x-3">
             <span className="font-bold text-white tracking-tight">STREAMFLOW</span>
             <span>•</span>
-            <span className="flex items-center gap-1 text-emerald-400">
-              <ShieldCheck className="w-3.5 h-3.5" /> Netflix/YouTube Grade Protection
+            <span className="text-slate-400">
+              HLS Video Player
             </span>
           </div>
           <div>
-            Powered by Rust 1.99, Tokio, Axum, SQLite WAL, and Next.js 14
+            Built with Rust, SQLite, and Next.js
           </div>
         </div>
       </footer>

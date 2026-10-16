@@ -44,14 +44,14 @@ impl StreamEngine {
             .time_to_idle(Duration::from_secs(120))
             .build();
 
-        // High-speed manifest cache for sub-millisecond playlist delivery
+        // In-memory cache for playlists
         let manifest_cache = Cache::builder()
             .max_capacity(2000)
             .time_to_live(Duration::from_secs(5)) // 5 seconds default TTL (avoids stale live windows)
             .time_to_idle(Duration::from_secs(10))
             .build();
 
-        info!("StreamEngine initialized with {} MB LRU cache and Manifest Accelerator.", cache_mb);
+        info!("StreamEngine initialized with {} MB cache.", cache_mb);
 
         StreamEngine {
             client,

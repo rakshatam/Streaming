@@ -125,17 +125,17 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
         return Ok(());
     }
 
-    info!("Seeding expanded catalog of 25+ high-quality 1080p streams and VODs...");
+    info!("Seeding video catalog...");
 
     let now = chrono::Utc::now().timestamp();
 
     let initial_videos = vec![
         (
             "phantom-flex-4k",
-            "Skate Phantom Flex (Native 4K Ultra HD 2160p)",
-            "Ultra high-speed high frame rate cinematography filmed with the Phantom Flex 4K camera at 1000fps and mastered in full 3840x2160 Ultra HD resolution.",
+            "Skate Phantom Flex (4K)",
+            "High-speed skateboarding filmed with a Phantom Flex 4K camera at 1000fps.",
             "Sports",
-            "4K Ultra HD",
+            "4K",
             "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8",
             "https://images.unsplash.com/photo-1564982752979-3f7bc974d29a?w=800&q=80",
             "https://images.unsplash.com/photo-1520045892732-304bc3ac5d8e?w=1600&q=85",
@@ -144,12 +144,12 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
             1, // featured
             295000,
             5.0,
-            "4k, ultrahd, sports, skate, highspeed, phantom, cinematic"
+            "4k, sports, skate, highspeed, cinematic"
         ),
         (
             "tears-of-steel",
-            "Tears of Steel (1080p / 4K Multi-Bitrate)",
-            "Set in a dystopian future, a group of warriors and scientists gather at the Oude Kerk in Amsterdam to stage a desperate attempt to rescue the world from destructive robots.",
+            "Tears of Steel",
+            "In a dystopian future, a group of scientists and warriors make a stand in Amsterdam.",
             "Sci-Fi",
             "1080p / 4K",
             "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.mp4/.m3u8",
@@ -164,8 +164,8 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
         ),
         (
             "big-buck-bunny",
-            "Big Buck Bunny (1080p 60fps Remaster)",
-            "A large and lovable rabbit deals with bullying forest creatures in this iconic open-source animation masterpiece rendered in high fidelity 1080p 60fps.",
+            "Big Buck Bunny",
+            "A rabbit deals with forest creatures in this open-source animated short.",
             "Animation",
             "1080p 60fps",
             "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
@@ -260,8 +260,8 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
         ),
         (
             "history-warfare",
-            "History and Warfare Now 1080p",
-            "Immersive military history, strategic battles, tactical combat analysis, and deep historical documentaries streamed in full 1080p from Cloudfront CDN.",
+            "History and Warfare",
+            "Military history, strategic battles, and historical documentaries.",
             "Documentary",
             "1080p HD",
             "https://d28gzbv9fhdm3h.cloudfront.net/playlist/amg00376-magellantv-historyandwarfarenowaunzin-samsungau/playlist.m3u8",

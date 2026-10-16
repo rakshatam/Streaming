@@ -137,17 +137,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
         {/* Header */}
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-red-500 font-bold text-xs uppercase tracking-wider">
-            <ShieldCheck className="w-4 h-4" />
-            <span>Argon2id Cryptographic Security</span>
-          </div>
           <h3 className="text-2xl font-bold text-white tracking-tight">
             {isRegister ? 'Create Account' : 'Sign In'}
           </h3>
           <p className="text-xs text-slate-400">
             {isRegister
-              ? 'Choose a unique username and strong password. No email required.'
-              : 'Enter your credentials to rate, like, and save videos.'}
+              ? 'Choose a username and password to create your account.'
+              : 'Sign in to like and rate videos.'}
           </p>
         </div>
 
