@@ -14,20 +14,21 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        // These connection-local settings must be applied whenever the pool
+        // opens a SQLite connection, not just to whichever connection a
+        // one-off PRAGMA query happens to acquire.
+        .pragma("cache_size", "-4096")
+        .pragma("mmap_size", "16777216")
+        .pragma("temp_store", "MEMORY");
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(20)
-        .min_connections(2)
+        .max_connections(10)
+        .min_connections(1)
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Duration::from_secs(600))
         .connect_with(connect_opts)
         .await?;
-
-    // Enable memory & cache optimizations
-    let _ = sqlx::query("PRAGMA cache_size = -16000;").execute(&pool).await;
-    let _ = sqlx::query("PRAGMA mmap_size = 67108864;").execute(&pool).await;
-    let _ = sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await;
 
     // Create tables
     sqlx::query(
@@ -104,7 +105,15 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
             category,
             tags
         );
-        "#
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Existing databases were created with a case-sensitive UNIQUE constraint.
+    // This index also protects the case-insensitive username check from races.
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase_idx ON users(username COLLATE NOCASE)",
     )
     .execute(&pool)
     .await?;
@@ -116,26 +125,10 @@ pub async fn init_db(database_url: &str) -> Result<DbPool, sqlx::Error> {
 }
 
 async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
-
-    // Ensure Tears of Steel uses multi-bitrate 4K stream URL
-    let _ = sqlx::query(
-        "UPDATE videos SET stream_url = ?, quality = '1080p / 4K' WHERE id = 'tears-of-steel'"
-    )
-    .bind("https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.mp4/.m3u8")
-    .execute(pool)
-    .await;
-
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM videos")
-        .fetch_one(pool)
-        .await?;
-
-    if count.0 >= 22 {
-        return Ok(());
-    }
-
     info!("Seeding video catalog...");
 
     let now = chrono::Utc::now().timestamp();
+    let mut transaction = pool.begin().await?;
 
     let initial_videos = vec![
         (
@@ -495,12 +488,24 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
     for v in initial_videos {
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO videos (
+            INSERT INTO videos (
                 id, title, description, category, quality, stream_url,
                 thumbnail_url, backdrop_url, duration_secs, is_live,
                 is_featured, views_count, rating, tags, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                description = excluded.description,
+                category = excluded.category,
+                quality = excluded.quality,
+                stream_url = excluded.stream_url,
+                thumbnail_url = excluded.thumbnail_url,
+                backdrop_url = excluded.backdrop_url,
+                duration_secs = excluded.duration_secs,
+                is_live = excluded.is_live,
+                is_featured = excluded.is_featured,
+                tags = excluded.tags
+            "#,
         )
         .bind(v.0)
         .bind(v.1)
@@ -517,24 +522,30 @@ async fn seed_database(pool: &DbPool) -> Result<(), sqlx::Error> {
         .bind(v.12)
         .bind(v.13)
         .bind(now)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
 
-        // Seed FTS5 table
-        let _ = sqlx::query(
+        // Keep the FTS5 entry in sync without duplicating it or suppressing
+        // indexing errors during startup.
+        sqlx::query("DELETE FROM fts_videos WHERE video_id = ?")
+            .bind(v.0)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
             r#"
-            INSERT OR REPLACE INTO fts_videos (video_id, title, description, category, tags)
+            INSERT INTO fts_videos (video_id, title, description, category, tags)
             VALUES (?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(v.0)
         .bind(v.1)
         .bind(v.2)
         .bind(v.3)
         .bind(v.13)
-        .execute(pool)
-        .await;
+        .execute(&mut *transaction)
+        .await?;
     }
 
+    transaction.commit().await?;
     Ok(())
 }

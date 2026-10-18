@@ -1,10 +1,19 @@
+use crate::config::Config;
 use lettre::{
     message::{header::ContentType, Mailbox},
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use tracing::{error, info, warn};
-use crate::config::Config;
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
 
 /// Sends a security OTP verification email to the user.
 /// Returns Ok(true) if email was successfully dispatched over SMTP.
@@ -16,6 +25,10 @@ pub async fn send_otp_email(
     otp_code: &str,
     config: &Config,
 ) -> Result<bool, String> {
+    if otp_code.len() != 6 || !otp_code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("OTP code must contain exactly six digits".into());
+    }
+
     let smtp_host = match &config.smtp_host {
         Some(host) if !host.trim().is_empty() => host.clone(),
         _ => {
@@ -29,12 +42,14 @@ pub async fn send_otp_email(
     let from_mailbox: Mailbox = config
         .smtp_from
         .parse()
-        .unwrap_or_else(|_| "StreamFlow <noreply@streamflow.tv>".parse().unwrap());
+        .map_err(|error| format!("Invalid SMTP_FROM address: {error}"))?;
 
     let to_mailbox: Mailbox = format!("{} <{}>", username, to_email)
         .parse()
         .map_err(|e| format!("Invalid recipient email address: {}", e))?;
 
+    let safe_username = escape_html(username);
+    let safe_otp_code = escape_html(otp_code);
     let html_content = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -79,13 +94,13 @@ pub async fn send_otp_email(
   </div>
 </body>
 </html>"#,
-        username, otp_code
+        safe_username, safe_otp_code
     );
 
     let email_msg = Message::builder()
         .from(from_mailbox)
         .to(to_mailbox)
-        .subject(format!("StreamFlow: Your Verification Code is {}", otp_code))
+        .subject("StreamFlow: Your email verification code")
         .header(ContentType::TEXT_HTML)
         .body(html_content)
         .map_err(|e| format!("Failed to build email message: {}", e))?;
@@ -100,30 +115,32 @@ pub async fn send_otp_email(
             .port(config.smtp_port)
     };
 
-    if let (Some(user), Some(pass)) = (&config.smtp_user, &config.smtp_pass) {
-        transport_builder = transport_builder.credentials(Credentials::new(user.clone(), pass.clone()));
+    match (&config.smtp_user, &config.smtp_pass) {
+        (Some(user), Some(pass)) => {
+            transport_builder =
+                transport_builder.credentials(Credentials::new(user.clone(), pass.clone()));
+        }
+        (None, None) => {}
+        _ => return Err("SMTP_USER and SMTP_PASS must either both be set or both be empty".into()),
     }
 
     let transport = transport_builder.build();
 
     info!(
-        "[EMAIL DISPATCHER] Contacting SMTP host {}:{} for recipient {}...",
-        smtp_host, config.smtp_port, to_email
+        "[EMAIL DISPATCHER] Contacting SMTP host {}:{}...",
+        smtp_host, config.smtp_port
     );
 
     match transport.send(email_msg).await {
         Ok(resp) => {
             info!(
-                "[EMAIL DISPATCHER] Successfully delivered OTP email to {} via SMTP (Response: {:?})",
-                to_email, resp
+                "[EMAIL DISPATCHER] Successfully delivered OTP email via SMTP (Response: {:?})",
+                resp
             );
             Ok(true)
         }
         Err(e) => {
-            error!(
-                "[EMAIL DISPATCHER] SMTP transmission failed for {}: {}",
-                to_email, e
-            );
+            error!("[EMAIL DISPATCHER] SMTP transmission failed: {}", e);
             Err(e.to_string())
         }
     }

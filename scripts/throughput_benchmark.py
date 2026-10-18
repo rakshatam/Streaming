@@ -5,25 +5,22 @@ Measures RPS, TTFB, P95 latency, segment streaming bandwidth, and LRU cache acce
 """
 
 import sys
+import os
+import math
 import time
 import urllib.request
 import urllib.error
-import ssl
 import json
 import concurrent.futures
 from typing import List, Dict
 
-BASE_URL = "http://127.0.0.1:8080"
+BASE_URL = os.environ.get("STREAMFLOW_API_BASE", "http://127.0.0.1:8080").rstrip("/")
 
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-
-def fetch_url(url: str, headers: dict = None) -> (int, float, int):
+def fetch_url(url: str, headers: dict | None = None) -> tuple[int, float, int]:
     t0 = time.perf_counter()
     req = urllib.request.Request(url, headers=headers or {'User-Agent': 'StreamFlow-Benchmark/1.0'})
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
             elapsed_ms = (time.perf_counter() - t0) * 1000
             return resp.status, elapsed_ms, len(data)
@@ -59,9 +56,10 @@ def run_concurrency_test(name: str, url: str, num_requests: int = 100, concurren
 
     rps = num_requests / total_time if total_time > 0 else 0
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
-    p50 = latencies[int(len(latencies) * 0.50)] if latencies else 0
-    p95 = latencies[int(len(latencies) * 0.95)] if latencies else 0
-    p99 = latencies[int(len(latencies) * 0.99)] if latencies else 0
+    percentile = lambda fraction: latencies[min(math.ceil(fraction * len(latencies)) - 1, len(latencies) - 1)] if latencies else 0
+    p50 = percentile(0.50)
+    p95 = percentile(0.95)
+    p99 = percentile(0.99)
     mb_transferred = total_bytes / (1024 * 1024)
     mbps = (total_bytes * 8) / (total_time * 1000 * 1000) if total_time > 0 else 0
 
@@ -76,7 +74,7 @@ def run_concurrency_test(name: str, url: str, num_requests: int = 100, concurren
         "rps": rps,
         "avg_ms": avg_latency,
         "p95_ms": p95,
-        "success_rate": (statuses.get(200, 0) / num_requests) * 100,
+        "success_rate": ((statuses.get(200, 0) + statuses.get(206, 0)) / num_requests) * 100,
     }
 
 def main():

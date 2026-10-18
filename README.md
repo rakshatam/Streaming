@@ -1,216 +1,146 @@
 # StreamFlow
 
-StreamFlow is a memory-bounded video streaming proxy and web application built with Rust and Next.js. It implements HMAC-SHA256 signed URL verification, dynamic HLS manifest rewriting, bounded in-memory segment caching, SQLite metadata storage with full-text search, and a Next.js client interface.
+StreamFlow is a demo HLS video catalog and streaming proxy. The backend uses Rust, Axum, SQLite, and Moka; the browser interface uses Next.js, React, TypeScript, and hls.js.
 
----
+The repository includes a seeded catalog of public sample and live feeds. Availability and playback rights depend on each upstream provider. This project does not host or store the upstream video files.
 
-## Architecture Overview
+## Features
 
-```
-+-------------------------------------------------------------------------------+
-|                                SYSTEM TOPOLOGY                                |
-+-------------------------------------------------------------------------------+
+- Catalog browsing, category filtering, and SQLite FTS5 search.
+- HLS master and media playlist rewriting, signed stream URLs, byte-range forwarding, and a bounded in-memory segment cache.
+- Username/password registration and login, Argon2id password hashes, and signed JWT sessions.
+- Video likes and ratings, plus backend endpoints for watch history and bookmarks.
+- Health and cache metrics endpoints.
+- Docker Compose deployment with a persistent SQLite volume.
 
-  [ Web Browser ]
-         |
-         |  1. HTTP/HTTPS (Port 3000)
-         v
-  +-----------------------------+
-  |      Next.js Frontend       |
-  |  - Player & Telemetry HUD   |
-  |  - Catalog & Search Views   |
-  |  - Authentication Modals    |
-  +-----------------------------+
-         |
-         |  2. REST API / Streaming Proxy (Port 8080)
-         v
-  +-----------------------------------------------------------------------------+
-  |                          StreamFlow Rust Backend                            |
-  |                                                                             |
-  |  +-----------------------------------------------------------------------+  |
-  |  |                         Rust Axum HTTP Server                         |  |
-  |  |                                                                       |  |
-  |  |  +-----------------------+                 +-----------------------+  |  |
-  |  |  |   Auth & Catalog API  |                 | Stream Proxy Engine   |  |  |
-  |  |  |   - Argon2id / JWT    |                 | - HMAC Token Signer   |  |  |
-  |  |  |   - SQLite WAL / FTS5 |                 | - M3U8 Rewriter       |  |  |
-  |  |  +-----------------------+                 | - Cache Controller    |  |  |
-  |  |              |                             +-----------------------+  |  |
-  |  +--------------|-----------------------------------------|--------------+  |
-  |                 |                                         |                 |
-  |                 v                                         v                 |
-  |       +-------------------+                     +--------------------+      |
-  |       | SQLite Database   |                     | In-Memory Cache    |      |
-  |       | (WAL, 16MB cache) |                     | (Moka, 64MB cap)   |      |
-  |       +-------------------+                     +--------------------+      |
-  +-----------------------------------------------------------|-----------------+
-                                                              |
-                                                              | 3. Upstream Fetch
-                                                              v
-                                                   +---------------------+
-                                                   | External Video CDNs |
-                                                   | (Public HLS Streams)|
-                                                   +---------------------+
+## Architecture
+
+```text
+Browser
+  └─ Next.js frontend :3000
+       └─ /api/* rewrite ──> Rust/Axum backend :8080
+                               ├─ SQLite catalog, accounts, and interactions
+                               ├─ bounded Moka segment and manifest caches
+                               └─ HTTPS/HTTP HLS upstreams
 ```
 
----
+For local development, Next.js sends `/api/*` to `http://127.0.0.1:8080`. In Docker, the frontend rewrite targets `http://streamflow-backend:8080` over the Compose network.
 
-## Streaming Lifecycle & Token Verification Workflow
+## Requirements
 
-```
-Client (Browser / Hls.js)               StreamFlow Rust Core               Upstream CDN
-         |                                       |                              |
-         | 1. GET /api/stream/manifest/:id       |                              |
-         |-------------------------------------->|                              |
-         |                                       | 2. Fetch original manifest   |
-         |                                       |----------------------------->|
-         |                                       | 3. Return M3U8 text          |
-         |                                       |<-----------------------------|
-         |                                       |                              |
-         |                                       | 4. Parse & Rewrite:          |
-         |                                       |    Generate HMAC signature   |
-         |                                       |    exp = now + TTL           |
-         |                                       |    Rewrite sub-playlists &   |
-         |                                       |    segments to proxy routes  |
-         | 5. Return rewritten M3U8              |                              |
-         |<--------------------------------------|                              |
-         |                                       |                              |
-         | 6. GET /api/stream/segment?           |                              |
-         |    uri={target}&token={sig}&exp={t}   |                              |
-         |-------------------------------------->|                              |
-         |                                       | 7. Validate HMAC & expiry:   |
-         |                                       |    sig == HMAC(uri:exp, key) |
-         |                                       |    If expired -> 403         |
-         |                                       |    If tampered -> 403        |
-         |                                       |                              |
-         |                                       | 8. Check 64MB Moka cache:    |
-         |                                       |    If HIT -> return cached   |
-         |                                       |    If MISS -> fetch upstream |
-         |                                       |----------------------------->|
-         |                                       | 9. Upstream segment bytes    |
-         |                                       |<-----------------------------|
-         |                                       | 10. Store in LRU cache       |
-         | 11. Stream bytes (video/MP2T)         |                              |
-         |<--------------------------------------|                              |
+- Rust toolchain and Cargo.
+- Node.js 20 or later and npm.
+- Python 3.10 or later for the benchmark scripts.
+- Docker Compose (optional).
+- OpenSSL or another secure random generator to create application secrets.
+
+## Configure secrets
+
+The backend refuses to start without separate `HMAC_SECRET` and `JWT_SECRET` values, each at least 32 bytes long. Create a local environment file and replace both placeholders with different random values:
+
+```powershell
+Copy-Item backend/.env.example backend/.env
+openssl rand -hex 32
 ```
 
----
+Run the OpenSSL command separately for each secret and paste the results into `backend/.env`. Keep that file private; it is excluded from Git and Docker build contexts. `CACHE_ADMIN_TOKEN` is optional. Set it to a third random value only if you need the cache-clear endpoint.
 
-## Stack Component Details
+Set `CORS_ALLOWED_ORIGINS` to the exact browser-facing frontend origin or comma-separated origins. The default allows local development at `localhost:3000` and `127.0.0.1:3000`.
 
-### 1. Backend Core (Rust)
-- **Language & Runtime:** Rust (2021 edition) using `tokio` (multi-threaded asynchronous event loop using non-blocking epoll/kqueue/IOCP).
-- **HTTP Routing:** `axum` 0.7 with `tower-http` middleware for CORS, compression, tracing, and security headers (`nosniff`, `DENY`, `strict-origin-when-cross-origin`).
-- **Cryptographic Security:**
-  - Stream token verification via HMAC-SHA256 (`hmac` and `sha2` crates). Query parameters `uri`, `token`, and `exp` ensure signed URLs cannot be altered or replayed past expiration.
-  - User password hashing via Argon2id (`argon2` crate) using randomized salts and standard memory/iteration parameters.
-  - User authentication via stateless JSON Web Tokens (`jsonwebtoken` crate) using HMAC-SHA256 signatures.
-- **In-Memory Cache:** `moka` asynchronous cache configured with:
-  - Bounded capacity: 64 MB (`SEGMENT_CACHE_MB=64`), weighted by byte length.
-  - TTL (Time To Live): 300 seconds for segments, 5 seconds for live playlists.
-  - TTI (Time To Idle): 120 seconds for segments.
-  - Immediate eviction endpoint: `POST /api/cache/clear`.
-- **Database Engine:** `sqlx` with embedded SQLite:
-  - Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) for concurrent reads during writes.
-  - Synchronization: `PRAGMA synchronous = NORMAL;`.
-  - Memory page cache: `PRAGMA cache_size = -16000;` (16 MB maximum).
-  - Memory-mapped I/O: `PRAGMA mmap_size = 67108864;` (64 MB).
-  - Connection pool bounded to 20 connections to minimize memory allocations.
-  - Full-Text Search index via SQLite FTS5 for video title, description, and tag queries.
+## Run locally
 
-### 2. Frontend Application (Next.js & TypeScript)
-- **Framework:** Next.js 14 (App Router) with React 18 and TypeScript.
-- **Dynamic API Routing:** `frontend/lib/api.ts` resolves backend endpoints, defaulting to relative `/api/*` paths proxied by Next.js rewrites in local development.
-- **Player & Telemetry:**
-  - Integrated `hls.js` video player supporting adaptive bitrate streaming, resolution ladder switching, and buffer health tracking.
-  - Telemetry HUD reporting real-time resolution, bitrate, buffer status, and in-player cache purge controls.
-- **Styling & Assets:** Tailwind CSS with Lucide icons.
+Start the backend from the repository root with the command below, or run `cargo run --release` from the `backend` directory. The configuration loader reads `backend/.env` from either location.
 
-### 3. Containerization & CI/CD
-- **Docker Multi-Stage Build:** `Dockerfile.backend` compiles in `rust:1.80-slim-bookworm` and copies the stripped release binary to a minimal `debian:bookworm-slim` image (~85 MB total container footprint).
-- **Docker Compose:** `docker-compose.yml` orchestrates backend and frontend containers with isolated bridge networking and volume persistence.
-- **GitHub Actions Workflow:** `.github/workflows/ci.yml` runs Rust check, unit/integration tests, Next.js build, throughput benchmark, and multi-stage Docker build validation on every push.
-
----
-
-## Throughput & Memory Benchmark Results
-
-Automated stress testing executed via `scripts/throughput_benchmark.py` and `benchmark_render.py`:
-
-| Test Suite | Concurrency | Requests | Requests/Sec (RPS) | Avg Latency | P95 Latency | Success Rate |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **API Health & Telemetry** | 20 | 200 | **956.0 RPS** | 15.40 ms | 25.86 ms | **100.0%** |
-| **Catalog Listing (SQLite WAL)** | 15 | 150 | **1005.0 RPS** | 13.55 ms | 20.22 ms | **100.0%** |
-| **FTS5 Full-Text Search ('space')** | 10 | 100 | **1022.5 RPS** | 8.76 ms | 13.19 ms | **100.0%** |
-| **M3U8 Manifest Rewriter & HMAC Signer** | 5 | 50 | **45.6 RPS** | 108.97 ms | 1016.99 ms | **100.0%** |
-
-### Memory Footprint Metrics
-- **Idle Working Set (RAM):** 9.79 MB
-- **Peak Working Set (20 concurrent threads):** 21.21 MB
-- **Private Memory:** 11.52 MB
-- **Cache Purge:** Calling `POST /api/cache/clear` invalidates all cached segments and manifests immediately.
-
----
-
-## API Specification
-
-| Method | Endpoint | Auth | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/health` | No | Service status and version check |
-| `GET` | `/api/metrics` | No | Cache hit ratio, total requests, streamed megabytes, and active entries |
-| `POST` | `/api/cache/clear` | No | Invalidate all segment and manifest caches and reset counters |
-| `POST` | `/api/auth/register` | No | Register user account with Argon2id password hashing |
-| `POST` | `/api/auth/login` | No | Authenticate username/password and return JWT |
-| `GET` | `/api/auth/me` | Bearer JWT | Return authenticated user details |
-| `GET` | `/api/videos` | No | List video catalog (filter by category, live, featured) |
-| `GET` | `/api/videos/search?q={term}` | No | Full-text search across titles, descriptions, and tags |
-| `GET` | `/api/videos/:id` | No | Retrieve single video metadata |
-| `GET` | `/api/videos/categories` | No | List distinct categories with stream counts |
-| `GET` | `/api/videos/:id/interactions` | Optional | Retrieve like status, like count, and user/average ratings |
-| `POST` | `/api/videos/:id/like` | Bearer JWT | Toggle like status for the authenticated user |
-| `POST` | `/api/videos/:id/rate` | Bearer JWT | Submit 1-5 star rating |
-| `GET` | `/api/stream/manifest/:id` | No | Return rewritten M3U8 manifest with signed gateway URLs |
-| `GET` | `/api/stream/playlist` | HMAC Token | Proxy quality ladder playlists |
-| `GET` | `/api/stream/segment` | HMAC Token | Proxy and cache `.ts`/`.m4s` video segments with byte-range support |
-
----
-
-## Local Development Setup
-
-### Prerequisites
-- Rust 1.80+ (`cargo`, `rustc`)
-- Node.js 20+ (`npm`)
-- Docker (optional, for containerized run)
-
-### 1. Run Backend
-```bash
-cd backend
-cargo run --release
+```powershell
+cargo run --release --manifest-path backend/Cargo.toml
 ```
-The backend initializes the SQLite database (`streamflow.db`), applies migrations, runs search seeders, and listens on `http://0.0.0.0:8080`.
 
-### 2. Run Frontend
-```bash
-cd frontend
-npm install
+The backend listens on `127.0.0.1:8080` by default, creates the SQLite database if needed, initializes the schema and FTS5 index, and synchronizes the seeded catalog.
+
+In a second terminal:
+
+```powershell
+Set-Location frontend
+npm ci
 npm run dev
 ```
-The frontend starts on `http://localhost:3000` and proxies `/api/*` requests to `http://127.0.0.1:8080`.
 
-### 3. Run Automated Tests
-```bash
-cd backend
-cargo test
+Open <http://localhost:3000>. The development rewrite sends API calls to the local backend. To use a different API server directly from the browser, set `NEXT_PUBLIC_API_URL` when building the frontend and include the frontend origin in the backend CORS allowlist.
+
+## Run with Docker Compose
+
+After creating and filling in `backend/.env`, run:
+
+```powershell
+docker compose --env-file backend/.env up --build
 ```
 
-### 4. Run with Docker Compose
-```bash
-docker compose up --build
-```
-This starts both the Rust backend (`http://localhost:8080`) and the Next.js frontend (`http://localhost:3000`) in isolated containers.
+The frontend is available at <http://localhost:3000>. The backend is bound to `127.0.0.1:8080`; SQLite data persists in the `streamflow_data` named volume. Compose passes secrets from `backend/.env` and builds the frontend with the backend service URL.
 
----
+For a separately built Next.js server, set `BACKEND_URL` at build time to the backend API origin. `NEXT_PUBLIC_API_URL` is used by browser code for direct API access; `BACKEND_URL` is used by the Next.js server rewrite. A static export requires `STATIC_EXPORT=true` and a public `NEXT_PUBLIC_API_URL`; no static-site deployment workflow is included.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SERVER_HOST` | `127.0.0.1` | Backend bind address. Use `0.0.0.0` inside a container. |
+| `PORT` / `SERVER_PORT` | `8080` | Backend listening port. `PORT` takes precedence when set. |
+| `DATABASE_URL` | `sqlite://streamflow.db?mode=rwc` | SQLx SQLite connection URL. Relative paths use the process working directory. |
+| `HMAC_SECRET` | Required | Secret for signing stream resource URLs; minimum 32 bytes. |
+| `JWT_SECRET` | Required | Separate secret for JWT signatures; minimum 32 bytes. |
+| `CACHE_ADMIN_TOKEN` | Unset | Optional bearer token for `POST /api/cache/clear`. |
+| `CORS_ALLOWED_ORIGINS` | Local frontend origins | Comma-separated HTTP(S) origins, without paths or wildcards. |
+| `SEGMENT_CACHE_MB` | `64` | Segment cache capacity from 1 to 128 MiB. |
+| `TOKEN_VALIDITY_SECS` | `3600` | Stream URL lifetime from 60 to 86,400 seconds. |
+| `BACKEND_URL` | Local in development; Compose service in Docker | Build-time Next.js rewrite target. |
+| `NEXT_PUBLIC_API_URL` | Empty | Optional browser API origin; empty uses relative `/api` paths. |
+| `NEXT_PUBLIC_BASE_PATH` | Empty | Optional Next.js base path. |
+| `STATIC_EXPORT` | `false` | Set to `true` to enable Next.js static export. |
+
+Upstream TLS certificates are verified. The proxy accepts only HTTP(S) resource URLs, rejects local and reserved literal addresses and common local hostnames, and limits upstream concurrency and response sizes. Keep the catalog's upstream URLs under trusted control.
+
+## API
+
+All paths are served by the Rust backend. `:id` denotes a video ID.
+
+| Method | Endpoint | Authentication | Description |
+| --- | --- | --- | --- |
+| `GET` | `/api/health` | None | Liveness response. |
+| `GET` | `/api/metrics` | None | Stream request, cache, and byte counters. |
+| `POST` | `/api/cache/clear` | `Authorization: Bearer <CACHE_ADMIN_TOKEN>` | Clear both caches and reset cache hit/miss counters. Returns 404 when no admin token is configured. |
+| `POST` | `/api/auth/register` | None | Register with a username and 8–128-byte password. |
+| `POST` | `/api/auth/login` | None | Authenticate and receive a JWT. |
+| `GET` | `/api/auth/me` | Bearer JWT | Return the current account profile. |
+| `GET` | `/api/videos` | None | List videos; supports `category`, `is_live`, `is_featured`, `limit`, and `offset`. |
+| `GET` | `/api/videos/search?q={term}` | None | Search title, description, category, and tags. |
+| `GET` | `/api/videos/categories` | None | List catalog categories and counts. |
+| `GET` | `/api/videos/:id` | None | Return video metadata. |
+| `GET` | `/api/videos/:id/interactions` | Optional bearer JWT | Return likes and rating aggregates, with the signed-in user's state when available. |
+| `POST` | `/api/videos/:id/like` | Bearer JWT | Toggle the signed-in user's like. |
+| `POST` | `/api/videos/:id/rate` | Bearer JWT | Set a 1–5 star rating. |
+| `GET`, `POST` | `/api/user/history` | Bearer JWT | Read history or update playback progress. |
+| `GET`, `POST` | `/api/user/bookmarks` | Bearer JWT | Read bookmarks or toggle a bookmark. |
+| `GET` | `/api/stream/manifest/:id` | None | Fetch and rewrite a catalog HLS manifest. |
+| `GET` | `/api/stream/playlist` | Signed stream URL | Fetch and rewrite a nested playlist. |
+| `GET` | `/api/stream/segment` | Signed stream URL | Fetch a segment, forward an optional byte range, and cache eligible responses. |
+
+Stream tokens bind a URL and expiration time. The proxy uses a four-request upstream concurrency limit, a 5 MiB playlist limit, and a 35 MiB segment limit; rewritten playlists are capped at 6 MiB, and only segments up to 10 MiB are cached. The configured segment cache limit applies to cached payload bytes.
+
+## Checks and benchmarks
+
+```powershell
+cargo fmt --manifest-path backend/Cargo.toml -- --check
+cargo check --manifest-path backend/Cargo.toml
+cargo test --manifest-path backend/Cargo.toml
+Set-Location frontend
+npm run typecheck
+npm run build
+```
+
+The GitHub Actions workflow runs Rust checks and tests, a frontend typecheck and build, a local HTTP throughput benchmark, and Docker image builds. To run the throughput script against a running backend, set `STREAMFLOW_API_BASE` (default `http://127.0.0.1:8080`) and run `python scripts/throughput_benchmark.py`.
+
+`benchmark_render.py` is a local stress probe, not a Render-hosted capacity test. It can sample the backend process on Windows; it does not claim a fixed memory limit, CPU allocation, or throughput result. Benchmark numbers depend on the host, upstream availability, and network conditions, so this README does not publish a fixed baseline.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT. See [LICENSE](LICENSE).

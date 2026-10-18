@@ -9,7 +9,7 @@ import { SearchModal } from '../components/SearchModal';
 import { AuthModal } from '../components/AuthModal';
 import { Video, User } from '../types';
 import { apiUrl } from '../lib/api';
-import { Radio, Film, Compass, ShieldCheck, Trophy, Newspaper, Sparkles, Tv, RotateCcw } from 'lucide-react';
+import { Radio, Film, Compass, Trophy, Newspaper, Tv, RotateCcw } from 'lucide-react';
 
 export default function Home() {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -30,14 +30,16 @@ export default function Home() {
       setCatalogError(null);
       try {
         const res = await fetch(apiUrl('/api/videos'));
-        if (res.ok) {
-          const data = await res.json();
-          if (!isCancelled) setVideos(data);
-        } else {
-          if (!isCancelled) setCatalogError(`Backend returned status ${res.status}`);
+        if (!res.ok) {
+          throw new Error(`Backend returned status ${res.status}`);
         }
-      } catch (err: any) {
-        if (!isCancelled) setCatalogError(err.message || 'Unable to connect to streaming backend');
+        const data: unknown = await res.json();
+        if (!Array.isArray(data)) throw new Error('Backend returned an invalid video catalog');
+        if (!isCancelled) setVideos(data as Video[]);
+      } catch (err: unknown) {
+        if (!isCancelled) {
+          setCatalogError(err instanceof Error ? err.message : 'Unable to connect to streaming backend');
+        }
       } finally {
         if (!isCancelled) setIsLoading(false);
       }
@@ -110,6 +112,12 @@ export default function Home() {
           onSignOut={handleSignOut}
           currentUser={currentUser}
         />
+
+        {isLoading && videos.length === 0 && !catalogError && (
+          <div role="status" className="max-w-md mx-auto my-32 p-8 text-center text-sm text-slate-400">
+            Loading the video catalog…
+          </div>
+        )}
 
         {/* Connection Failure Recovery */}
         {catalogError && videos.length === 0 && (

@@ -1,13 +1,24 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use futures_util::StreamExt;
 use moka::future::Cache;
 use reqwest::header::{HeaderValue, RANGE};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::Semaphore;
 use tracing::info;
 use url::Url;
 
 use crate::security::{sign_stream_token, verify_stream_token};
+
+const MAX_MANIFEST_BYTES: usize = 5 * 1024 * 1024;
+const MAX_REWRITTEN_MANIFEST_BYTES: usize = 6 * 1024 * 1024;
+const MAX_MANIFEST_LINE_BYTES: usize = 64 * 1024;
+const MAX_SEGMENT_BYTES: usize = 35 * 1024 * 1024;
+const MAX_CONCURRENT_UPSTREAM_REQUESTS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct SegmentData {
@@ -25,6 +36,7 @@ pub struct StreamEngine {
     manifest_cache: Cache<String, String>,
     hmac_secret: String,
     token_validity_secs: u64,
+    upstream_requests: Arc<Semaphore>,
     // Metrics counters
     pub total_requests: Arc<AtomicU64>,
     pub cache_hits: Arc<AtomicU64>,
@@ -41,12 +53,18 @@ impl StreamEngine {
             .tcp_keepalive(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(25))
-            .danger_accept_invalid_certs(true) // Resilience against varied upstream CDNs
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 || is_blocked_upstream_url(attempt.url()) {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .build()
             .expect("Failed to build HTTP streaming client");
 
-        let max_capacity_bytes = cache_mb * 1024 * 1024;
+        let max_capacity_bytes = cache_mb.saturating_mul(1024 * 1024);
         let segment_cache = Cache::builder()
             .max_capacity(max_capacity_bytes)
             .weigher(|_key, value: &SegmentData| value.bytes.len() as u32)
@@ -56,7 +74,8 @@ impl StreamEngine {
 
         // In-memory cache for playlists
         let manifest_cache = Cache::builder()
-            .max_capacity(2000)
+            .max_capacity(8 * 1024 * 1024)
+            .weigher(|key: &String, value: &String| (key.len() + value.len()) as u32)
             .time_to_live(Duration::from_secs(5)) // 5 seconds default TTL (avoids stale live windows)
             .time_to_idle(Duration::from_secs(10))
             .build();
@@ -69,6 +88,7 @@ impl StreamEngine {
             manifest_cache,
             hmac_secret,
             token_validity_secs,
+            upstream_requests: Arc::new(Semaphore::new(MAX_CONCURRENT_UPSTREAM_REQUESTS)),
             total_requests: Arc::new(AtomicU64::new(0)),
             cache_hits: Arc::new(AtomicU64::new(0)),
             cache_misses: Arc::new(AtomicU64::new(0)),
@@ -86,7 +106,10 @@ impl StreamEngine {
 
     /// Returns the current number of cached manifests and segments
     pub fn cache_entry_counts(&self) -> (u64, u64) {
-        (self.manifest_cache.entry_count(), self.segment_cache.entry_count())
+        (
+            self.manifest_cache.entry_count(),
+            self.segment_cache.entry_count(),
+        )
     }
 
     /// Directly inserts a segment for cache testing and runs eviction maintenance tasks
@@ -107,7 +130,7 @@ impl StreamEngine {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let expires_at = now + self.token_validity_secs;
+        let expires_at = now.saturating_add(self.token_validity_secs);
         let token = sign_stream_token(target_uri, expires_at, &self.hmac_secret);
         (token, expires_at)
     }
@@ -119,15 +142,24 @@ impl StreamEngine {
 
     /// Fetches upstream M3U8 manifest and rewrites sub-playlists and segments with signed gateway URLs
     pub async fn rewrite_manifest(&self, upstream_url: &str) -> Result<String, String> {
+        let base_url =
+            Url::parse(upstream_url).map_err(|e| format!("Invalid upstream URL: {e}"))?;
+        validate_upstream_url(&base_url)?;
+
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+
         // Check manifest cache for instant sub-millisecond response
         if let Some(cached_manifest) = self.manifest_cache.get(upstream_url).await {
-            self.total_requests.fetch_add(1, Ordering::Relaxed);
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(cached_manifest);
         }
 
-        let base_url = Url::parse(upstream_url)
-            .map_err(|e| format!("Invalid upstream URL: {}", e))?;
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
+        let _permit = self
+            .upstream_requests
+            .acquire()
+            .await
+            .map_err(|_| "Upstream request limiter is unavailable".to_string())?;
 
         let response = self
             .client
@@ -137,27 +169,26 @@ impl StreamEngine {
             .map_err(|e| format!("Failed to fetch upstream manifest: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("Upstream returned HTTP status {}", response.status()));
+            return Err(format!(
+                "Upstream returned HTTP status {}",
+                response.status()
+            ));
         }
 
-        if let Some(len) = response.content_length() {
-            if len > 5 * 1024 * 1024 {
-                return Err("Upstream manifest exceeds maximum allowed size of 5MB".to_string());
-            }
-        }
-
-        let raw_m3u8 = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read upstream manifest body: {}", e))?;
-
-        if raw_m3u8.len() > 5 * 1024 * 1024 {
-            return Err("Upstream manifest body exceeds 5MB limit".to_string());
-        }
+        let final_url = response.url().clone();
+        validate_upstream_url(&final_url)?;
+        let body = read_response_limited(response, MAX_MANIFEST_BYTES, "Manifest").await?;
+        let raw_m3u8 = String::from_utf8(body.to_vec())
+            .map_err(|_| "Upstream manifest is not valid UTF-8".to_string())?;
 
         let mut rewritten = String::with_capacity(raw_m3u8.len() + 4096);
 
         for line in raw_m3u8.lines() {
+            if line.len() > MAX_MANIFEST_LINE_BYTES {
+                return Err(
+                    "Upstream manifest contains a line larger than the 64 KiB limit".into(),
+                );
+            }
             let trimmed = line.trim();
 
             if trimmed.is_empty() {
@@ -166,23 +197,28 @@ impl StreamEngine {
             }
 
             if trimmed.starts_with('#') {
-                // Check for URI tags like #EXT-X-STREAM-INF, #EXT-X-MEDIA, #EXT-X-KEY
-                if trimmed.starts_with("#EXT-X-MEDIA:") && trimmed.contains("URI=\"") {
-                    rewritten.push_str(&self.rewrite_attribute_uri(trimmed, &base_url, "URI=\"", true));
-                } else if trimmed.starts_with("#EXT-X-KEY:") && trimmed.contains("URI=\"") {
-                    rewritten.push_str(&self.rewrite_attribute_uri(trimmed, &base_url, "URI=\"", false));
+                // HLS URI attributes appear on media, key, map, iframe, and
+                // steering tags. Preserve the tag and rewrite every URI value.
+                if trimmed.starts_with("#EXT-X-") && trimmed.contains("URI=\"") {
+                    let is_playlist = trimmed.starts_with("#EXT-X-MEDIA:")
+                        || trimmed.starts_with("#EXT-X-I-FRAME-STREAM-INF:");
+                    rewritten.push_str(&self.rewrite_attribute_uris(
+                        trimmed,
+                        &final_url,
+                        is_playlist,
+                    )?);
                 } else {
                     rewritten.push_str(trimmed);
                 }
                 rewritten.push('\n');
             } else {
                 // This is a playlist or segment URI line
-                let resolved_url = match base_url.join(trimmed) {
-                    Ok(u) => u.to_string(),
-                    Err(_) => trimmed.to_string(),
-                };
-
-                let is_playlist = resolved_url.contains(".m3u8") || trimmed.contains(".m3u8");
+                let resolved = final_url
+                    .join(trimmed)
+                    .map_err(|e| format!("Invalid HLS resource URI: {e}"))?;
+                validate_upstream_url(&resolved)?;
+                let resolved_url = resolved.to_string();
+                let is_playlist = resolved.path().to_ascii_lowercase().ends_with(".m3u8");
                 let endpoint = if is_playlist {
                     "/api/stream/playlist"
                 } else {
@@ -197,43 +233,57 @@ impl StreamEngine {
                     endpoint, encoded_uri, token, expires_at
                 ));
             }
+
+            if rewritten.len() > MAX_REWRITTEN_MANIFEST_BYTES {
+                return Err("Rewritten manifest exceeds the 6 MiB limit".into());
+            }
         }
 
         // Cache rewritten manifest
-        self.manifest_cache.insert(upstream_url.to_string(), rewritten.clone()).await;
+        self.manifest_cache
+            .insert(upstream_url.to_string(), rewritten.clone())
+            .await;
 
         Ok(rewritten)
     }
 
-    fn rewrite_attribute_uri(&self, line: &str, base_url: &Url, attr_prefix: &str, is_playlist: bool) -> String {
-        if let Some(start_idx) = line.find(attr_prefix) {
-            let uri_start = start_idx + attr_prefix.len();
-            if let Some(end_rel) = line[uri_start..].find('"') {
-                let uri_end = uri_start + end_rel;
-                let raw_uri = &line[uri_start..uri_end];
-                let resolved = match base_url.join(raw_uri) {
-                    Ok(u) => u.to_string(),
-                    Err(_) => raw_uri.to_string(),
-                };
+    fn rewrite_attribute_uris(
+        &self,
+        line: &str,
+        base_url: &Url,
+        is_playlist: bool,
+    ) -> Result<String, String> {
+        let mut output = String::with_capacity(line.len() + 128);
+        let mut cursor = 0;
 
-                let endpoint = if is_playlist {
-                    "/api/stream/playlist"
-                } else {
-                    "/api/stream/segment"
-                };
+        while let Some(relative_start) = line[cursor..].find("URI=\"") {
+            let uri_start = cursor + relative_start + "URI=\"".len();
+            let uri_end = line[uri_start..]
+                .find('"')
+                .map(|offset| uri_start + offset)
+                .ok_or_else(|| "Malformed HLS URI attribute".to_string())?;
+            let resolved = base_url
+                .join(&line[uri_start..uri_end])
+                .map_err(|e| format!("Invalid HLS URI attribute: {e}"))?;
+            validate_upstream_url(&resolved)?;
 
-                let (token, expires_at) = self.create_token(&resolved);
-                let encoded = urlencoding_simple(&resolved);
-                let proxied_uri = format!("{}?uri={}&token={}&exp={}", endpoint, encoded, token, expires_at);
+            let endpoint = if is_playlist {
+                "/api/stream/playlist"
+            } else {
+                "/api/stream/segment"
+            };
+            let resolved = resolved.to_string();
+            let (token, expires_at) = self.create_token(&resolved);
+            let encoded = urlencoding_simple(&resolved);
+            let proxied_uri = format!("{endpoint}?uri={encoded}&token={token}&exp={expires_at}");
 
-                let mut out = String::with_capacity(line.len() + proxied_uri.len());
-                out.push_str(&line[..uri_start]);
-                out.push_str(&proxied_uri);
-                out.push_str(&line[uri_end..]);
-                return out;
-            }
+            output.push_str(&line[cursor..uri_start]);
+            output.push_str(&proxied_uri);
+            cursor = uri_end;
         }
-        line.to_string()
+
+        output.push_str(&line[cursor..]);
+        Ok(output)
     }
 
     /// Fetches and caches video segments, handling byte-range requests for sub-millisecond seeking
@@ -252,7 +302,8 @@ impl StreamEngine {
         // 1. Check in-memory cache
         if let Some(cached) = self.segment_cache.get(&cache_key).await {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
-            self.bytes_streamed.fetch_add(cached.bytes.len() as u64, Ordering::Relaxed);
+            self.bytes_streamed
+                .fetch_add(cached.bytes.len() as u64, Ordering::Relaxed);
             return Ok(SegmentData {
                 bytes: cached.bytes.clone(),
                 content_type: cached.content_type.clone(),
@@ -263,6 +314,15 @@ impl StreamEngine {
         }
 
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
+
+        let parsed_url =
+            Url::parse(segment_url).map_err(|e| format!("Invalid segment URL: {e}"))?;
+        validate_upstream_url(&parsed_url)?;
+        let _permit = self
+            .upstream_requests
+            .acquire()
+            .await
+            .map_err(|_| "Upstream request limiter is unavailable".to_string())?;
 
         // 2. Fetch from upstream
         let mut req = self.client.get(segment_url);
@@ -282,12 +342,6 @@ impl StreamEngine {
             return Err(format!("Upstream segment returned HTTP {}", resp.status()));
         }
 
-        if let Some(len) = resp.content_length() {
-            if len > 35 * 1024 * 1024 {
-                return Err("Upstream segment exceeds maximum size of 35MB".to_string());
-            }
-        }
-
         let status = resp.status().as_u16();
         let content_range = resp
             .headers()
@@ -302,17 +356,13 @@ impl StreamEngine {
             .unwrap_or("video/MP2T")
             .to_string();
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read segment bytes: {}", e))?;
+        validate_upstream_url(resp.url())?;
+        let bytes = read_response_limited(resp, MAX_SEGMENT_BYTES, "Segment").await?;
 
         let byte_len = bytes.len();
-        if byte_len > 35 * 1024 * 1024 {
-            return Err("Segment payload exceeds 35MB limit".to_string());
-        }
 
-        self.bytes_streamed.fetch_add(byte_len as u64, Ordering::Relaxed);
+        self.bytes_streamed
+            .fetch_add(byte_len as u64, Ordering::Relaxed);
 
         let data = SegmentData {
             bytes: bytes.clone(),
@@ -329,6 +379,110 @@ impl StreamEngine {
 
         Ok(data)
     }
+}
+
+async fn read_response_limited(
+    response: reqwest::Response,
+    max_bytes: usize,
+    resource_name: &str,
+) -> Result<Bytes, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(format!(
+            "Upstream {resource_name} exceeds the {max_bytes}-byte limit"
+        ));
+    }
+
+    let mut chunks = response.bytes_stream();
+    let mut body = BytesMut::new();
+    while let Some(chunk) = chunks.next().await {
+        let chunk =
+            chunk.map_err(|error| format!("Failed to read upstream {resource_name}: {error}"))?;
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .map_or(true, |length| length > max_bytes)
+        {
+            return Err(format!(
+                "Upstream {resource_name} exceeds the {max_bytes}-byte limit"
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body.freeze())
+}
+
+fn validate_upstream_url(url: &Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Upstream resources must use HTTP or HTTPS".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Credentials in upstream URLs are not allowed".into());
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Upstream URL is missing a host".to_string())?;
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "localhost"
+        || normalized_host.ends_with(".localhost")
+        || normalized_host.ends_with(".local")
+        || normalized_host.ends_with(".internal")
+        || normalized_host.ends_with(".test")
+    {
+        return Err("Local and reserved host names are not allowed as upstreams".into());
+    }
+
+    match url.host() {
+        Some(url::Host::Ipv4(address)) if is_blocked_ipv4(address) => {
+            Err("Private or reserved IP addresses are not allowed as upstreams".into())
+        }
+        Some(url::Host::Ipv6(address)) if is_blocked_ipv6(address) => {
+            Err("Private or reserved IP addresses are not allowed as upstreams".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn is_blocked_upstream_url(url: &Url) -> bool {
+    validate_upstream_url(url).is_err()
+}
+
+fn is_blocked_ipv4(address: Ipv4Addr) -> bool {
+    let octets = address.octets();
+    address.is_private()
+        || address.is_loopback()
+        || address.is_link_local()
+        || address.is_broadcast()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || octets[0] == 0
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        || (octets[0] == 198 && (18..=19).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+        || octets[0] >= 240
+}
+
+fn is_blocked_ipv6(address: Ipv6Addr) -> bool {
+    let octets = address.octets();
+    let second_segment = u16::from_be_bytes([octets[2], octets[3]]);
+    address.is_loopback()
+        || address.is_unspecified()
+        || (octets[0] & 0xfe) == 0xfc
+        || (octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80)
+        || address.is_multicast()
+        || (octets[0] & 0xe0) != 0x20 // Outside global unicast (2000::/3).
+        || (octets[0] == 0x20 && octets[1] == 0x01 && second_segment <= 0x01ff)
+        || (octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x0d && octets[3] == 0xb8)
+        || (octets[0] == 0x20 && octets[1] == 0x02) // Deprecated 6to4.
+        || address.to_ipv4_mapped().is_some_and(is_blocked_ipv4)
 }
 
 fn urlencoding_simple(input: &str) -> String {

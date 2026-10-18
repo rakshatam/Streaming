@@ -23,9 +23,11 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
   };
 
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onPlay(video)}
-      className="group relative flex-shrink-0 w-64 sm:w-72 cursor-pointer transition-all duration-300"
+      aria-label={`Play ${video.title}`}
+      className="group relative flex-shrink-0 w-64 sm:w-72 cursor-pointer transition-all duration-300 text-left"
     >
       {/* Thumbnail Container */}
       <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-slate-900 border border-white/5 group-hover:border-red-500/50 shadow-md group-hover:shadow-2xl group-hover:shadow-red-600/20 group-hover:-translate-y-1.5 transition-all duration-300">
@@ -84,6 +86,6 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video, onPlay }) => {
           </div>
         </div>
       </div>
-    </div>
+    </button>
   );
 };

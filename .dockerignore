@@ -1,0 +1,14 @@
+.git
+.github
+**/node_modules
+**/.next
+**/target
+**/dist
+**/build
+**/.env
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.log
+*.pid
+STORAGE_AND_MAINTENANCE.md

@@ -5,8 +5,8 @@ pub mod email;
 pub mod security;
 pub mod stream;
 
-use std::sync::Arc;
 use crate::{config::Config, db::DbPool, stream::StreamEngine};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {

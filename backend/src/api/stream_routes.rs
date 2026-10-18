@@ -4,9 +4,20 @@ use axum::{
     response::Response,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{warn, error};
+use tracing::{error, warn};
 
 use crate::AppState;
+
+fn internal_error(
+    context: &'static str,
+    error_value: impl std::fmt::Display,
+) -> (StatusCode, String) {
+    error!("{context}: {error_value}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".into(),
+    )
+}
 
 #[derive(Debug, Deserialize)]
 pub struct StreamProxyQuery {
@@ -31,7 +42,7 @@ pub async fn get_manifest(
         .bind(&id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| internal_error("Manifest video lookup failed", e))?;
 
     let upstream_url = match video {
         Some((url,)) => url,
@@ -42,20 +53,22 @@ pub async fn get_manifest(
         .stream_engine
         .rewrite_manifest(&upstream_url)
         .await
-        .map_err(|e| {
-            error!("Manifest rewrite failure for video {}: {}", id, e);
-            (StatusCode::BAD_GATEWAY, format!("Stream acquisition failed: {}", e))
+        .map_err(|_| {
+            // Upstream request errors may contain sensitive query parameters.
+            error!(video_id = %id, "Manifest rewrite failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                "Unable to acquire the video stream".to_string(),
+            )
         })?;
 
     let resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
         .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .header("X-Content-Type-Options", "nosniff")
         .body(axum::body::Body::from(rewritten))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| internal_error("Manifest response construction failed", e))?;
 
     Ok(resp)
 }
@@ -65,26 +78,37 @@ pub async fn get_playlist(
     State(state): State<AppState>,
     Query(params): Query<StreamProxyQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    if !state.stream_engine.validate_token(&params.uri, &params.token, params.exp) {
-        warn!("Unauthorized or expired playlist token access for URI: {}", params.uri);
-        return Err((StatusCode::FORBIDDEN, "Invalid or expired stream token".to_string()));
+    if !state
+        .stream_engine
+        .validate_token(&params.uri, &params.token, params.exp)
+    {
+        warn!("Unauthorized or expired playlist token access");
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Invalid or expired stream token".to_string(),
+        ));
     }
 
     let rewritten = state
         .stream_engine
         .rewrite_manifest(&params.uri)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to fetch sub-playlist: {}", e)))?;
+        .map_err(|_| {
+            // Avoid logging upstream URLs, which can contain provider tokens.
+            error!("Sub-playlist fetch failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                "Unable to fetch the video playlist".to_string(),
+            )
+        })?;
 
     let resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
         .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .header("X-Content-Type-Options", "nosniff")
         .body(axum::body::Body::from(rewritten))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| internal_error("Playlist response construction failed", e))?;
 
     Ok(resp)
 }
@@ -95,9 +119,15 @@ pub async fn get_segment(
     Query(params): Query<StreamProxyQuery>,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
-    if !state.stream_engine.validate_token(&params.uri, &params.token, params.exp) {
-        warn!("Unauthorized segment access attempt detected. URI: {}", params.uri);
-        return Err((StatusCode::FORBIDDEN, "Invalid or expired stream token".to_string()));
+    if !state
+        .stream_engine
+        .validate_token(&params.uri, &params.token, params.exp)
+    {
+        warn!("Unauthorized segment access attempt detected");
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Invalid or expired stream token".to_string(),
+        ));
     }
 
     let client_range = headers
@@ -109,7 +139,14 @@ pub async fn get_segment(
         .stream_engine
         .fetch_segment(&params.uri, client_range)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Segment fetch failed: {}", e)))?;
+        .map_err(|_| {
+            // Avoid logging upstream URLs, which can contain provider tokens.
+            error!("Segment fetch failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                "Unable to fetch the video segment".to_string(),
+            )
+        })?;
 
     let cache_status = if seg.is_cached { "HIT" } else { "MISS" };
     let status_code = StatusCode::from_u16(seg.status).unwrap_or(StatusCode::OK);
@@ -121,7 +158,6 @@ pub async fn get_segment(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "public, max-age=86400, immutable")
         .header("X-Cache", cache_status)
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header("X-Content-Type-Options", "nosniff");
 
     if let Some(ref range) = seg.content_range {
@@ -130,7 +166,7 @@ pub async fn get_segment(
 
     let resp = builder
         .body(axum::body::Body::from(seg.bytes))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| internal_error("Segment response construction failed", e))?;
 
     Ok(resp)
 }

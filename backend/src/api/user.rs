@@ -5,12 +5,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
-use crate::{
-    api::videos::Video,
-    security::verify_jwt,
-    AppState,
-};
+use crate::{api::videos::Video, security::verify_jwt, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateProgressRequest {
@@ -40,12 +37,29 @@ fn extract_user_id(headers: &HeaderMap, jwt_secret: &str) -> Result<String, (Sta
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing authorization token".to_string()))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "Missing authorization token".to_string(),
+            )
+        })?;
 
-    let claims = verify_jwt(auth_header, jwt_secret)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
+    let claims = verify_jwt(auth_header, jwt_secret).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "Invalid or expired authorization token".into(),
+        )
+    })?;
 
     Ok(claims.sub)
+}
+
+fn database_error(error_value: sqlx::Error) -> (StatusCode, String) {
+    error!("User API database operation failed: {}", error_value);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".into(),
+    )
 }
 
 pub async fn get_history(
@@ -63,12 +77,12 @@ pub async fn get_history(
         WHERE h.user_id = ?
         ORDER BY h.updated_at DESC
         LIMIT 20
-        "#
+        "#,
     )
     .bind(&user_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(database_error)?;
 
     Ok(Json(history))
 }
@@ -79,6 +93,31 @@ pub async fn update_history(
     Json(payload): Json<UpdateProgressRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let user_id = extract_user_id(&headers, &state.config.jwt_secret)?;
+    if payload.video_id.trim().is_empty() || payload.video_id.len() > 100 {
+        return Err((StatusCode::BAD_REQUEST, "Invalid video id".into()));
+    }
+    if payload.progress_secs < 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Progress cannot be negative".into(),
+        ));
+    }
+
+    let video: Option<(i64,)> = sqlx::query_as("SELECT duration_secs FROM videos WHERE id = ?")
+        .bind(&payload.video_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(database_error)?;
+    let Some((duration_secs,)) = video else {
+        return Err((StatusCode::NOT_FOUND, "Video not found".into()));
+    };
+    if duration_secs > 0 && payload.progress_secs > duration_secs {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Progress exceeds the video duration".into(),
+        ));
+    }
+
     let now = chrono::Utc::now().timestamp();
 
     sqlx::query(
@@ -88,7 +127,7 @@ pub async fn update_history(
         ON CONFLICT(user_id, video_id) DO UPDATE SET
             progress_secs = excluded.progress_secs,
             updated_at = excluded.updated_at
-        "#
+        "#,
     )
     .bind(&user_id)
     .bind(&payload.video_id)
@@ -96,9 +135,12 @@ pub async fn update_history(
     .bind(now)
     .execute(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(database_error)?;
 
-    Ok((StatusCode::OK, Json(serde_json::json!({ "status": "updated" }))))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "updated" })),
+    ))
 }
 
 pub async fn get_bookmarks(
@@ -114,12 +156,12 @@ pub async fn get_bookmarks(
         JOIN videos v ON b.video_id = v.id
         WHERE b.user_id = ?
         ORDER BY b.created_at DESC
-        "#
+        "#,
     )
     .bind(&user_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(database_error)?;
 
     Ok(Json(bookmarks))
 }
@@ -130,27 +172,41 @@ pub async fn toggle_bookmark(
     Json(payload): Json<BookmarkToggleRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let user_id = extract_user_id(&headers, &state.config.jwt_secret)?;
+    if payload.video_id.trim().is_empty() || payload.video_id.len() > 100 {
+        return Err((StatusCode::BAD_REQUEST, "Invalid video id".into()));
+    }
 
-    let deleted = sqlx::query("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?")
-        .bind(&user_id)
+    let video_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM videos WHERE id = ?")
         .bind(&payload.video_id)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .rows_affected();
+        .map_err(database_error)?;
+    if video_exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Video not found".into()));
+    }
 
-    let is_bookmarked = if deleted > 0 {
-        false
+    let now = chrono::Utc::now().timestamp();
+    let inserted = sqlx::query(
+        "INSERT OR IGNORE INTO bookmarks (user_id, video_id, created_at) VALUES (?, ?, ?)",
+    )
+    .bind(&user_id)
+    .bind(&payload.video_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .map_err(database_error)?
+    .rows_affected();
+
+    let is_bookmarked = if inserted > 0 {
+        true
     } else {
-        let now = chrono::Utc::now().timestamp();
-        let _ = sqlx::query("INSERT OR IGNORE INTO bookmarks (user_id, video_id, created_at) VALUES (?, ?, ?)")
+        sqlx::query("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?")
             .bind(&user_id)
             .bind(&payload.video_id)
-            .bind(now)
             .execute(&state.db)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        true
+            .map_err(database_error)?;
+        false
     };
 
     Ok(Json(serde_json::json!({ "is_bookmarked": is_bookmarked })))

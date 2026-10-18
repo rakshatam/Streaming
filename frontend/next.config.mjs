@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const isStaticExport = process.env.STATIC_EXPORT === 'true';
+const backendUrl = process.env.BACKEND_URL || (
+  process.env.NODE_ENV === 'development'
+    ? 'http://127.0.0.1:8080'
+    : 'http://streamflow-backend:8080'
+);
 
 const nextConfig = {
   reactStrictMode: true,
@@ -23,7 +28,7 @@ const nextConfig = {
       return [
         {
           source: '/api/:path*',
-          destination: 'http://127.0.0.1:8080/api/:path*',
+          destination: `${backendUrl.replace(/\/$/, '')}/api/:path*`,
         },
       ];
     },

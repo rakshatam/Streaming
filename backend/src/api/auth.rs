@@ -5,13 +5,45 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
     security::{create_jwt, hash_password, verify_jwt, verify_password},
     AppState,
 };
+
+static PASSWORD_HASH_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn acquire_password_hash_slot() -> Result<OwnedSemaphorePermit, (StatusCode, Json<AuthError>)> {
+    PASSWORD_HASH_SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(4)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(AuthError {
+                    message: "Authentication is busy. Please try again shortly.".into(),
+                }),
+            )
+        })
+}
+
+fn internal_error(
+    context: &'static str,
+    error_value: impl std::fmt::Display,
+) -> (StatusCode, Json<AuthError>) {
+    error!("{context}: {error_value}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(AuthError {
+            message: "Internal server error".into(),
+        }),
+    )
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -70,11 +102,15 @@ pub async fn register(
         ));
     }
 
-    if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(AuthError {
-                message: "Username can only contain letters, numbers, underscores, and hyphens.".into(),
+                message: "Username can only contain letters, numbers, underscores, and hyphens."
+                    .into(),
             }),
         ));
     }
@@ -98,14 +134,14 @@ pub async fn register(
         ));
     }
 
-    // 3. Prevent duplicate username (case-insensitive check)
-    let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM users WHERE LOWER(username) = LOWER(?)"
-    )
-    .bind(&username)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
+    // 3. Prevent duplicate username (case-insensitive check). The matching
+    // database index also handles concurrent registrations safely.
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM users WHERE username COLLATE NOCASE = ?")
+            .bind(&username)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("Username lookup failed", e))?;
 
     if existing.is_some() {
         return Err((
@@ -117,8 +153,12 @@ pub async fn register(
     }
 
     // 4. Hash password with Argon2id (OWASP recommended parameters)
-    let password_hash = hash_password(&payload.password)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
+    let _hash_slot = acquire_password_hash_slot()?;
+    let password = payload.password;
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|e| internal_error("Password hashing task failed", e))?
+        .map_err(|e| internal_error("Password hashing failed", e))?;
 
     let user_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
@@ -128,7 +168,7 @@ pub async fn register(
         r#"
         INSERT INTO users (id, username, password_hash, role, created_at)
         VALUES (?, ?, ?, 'user', ?)
-        "#
+        "#,
     )
     .bind(&user_id)
     .bind(&username)
@@ -139,25 +179,32 @@ pub async fn register(
 
     if let Err(e) = insert_result {
         let err_msg = e.to_string();
-        if err_msg.contains("UNIQUE constraint failed") || err_msg.contains("unique constraint") {
+        if e.as_database_error()
+            .map(|database_error| database_error.is_unique_violation())
+            .unwrap_or(false)
+        {
             return Err((
                 StatusCode::CONFLICT,
                 Json(AuthError {
-                    message: "This username is already taken. Please choose another username.".into(),
+                    message: "This username is already taken. Please choose another username."
+                        .into(),
                 }),
             ));
         }
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AuthError { message: err_msg }),
-        ));
+        return Err(internal_error("User registration failed", err_msg));
     }
 
     info!("Registered user: '{}' ({})", username, user_id);
 
     // 6. Generate session token
-    let token = create_jwt(&user_id, &username, "user", &state.config.jwt_secret, 7 * 86400)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
+    let token = create_jwt(
+        &user_id,
+        &username,
+        "user",
+        &state.config.jwt_secret,
+        7 * 86400,
+    )
+    .map_err(|e| internal_error("Session token creation failed", e))?;
 
     let user_dto = UserDto {
         id: user_id,
@@ -166,7 +213,13 @@ pub async fn register(
         created_at: now,
     };
 
-    Ok((StatusCode::CREATED, Json(AuthResponse { token, user: user_dto })))
+    Ok((
+        StatusCode::CREATED,
+        Json(AuthResponse {
+            token,
+            user: user_dto,
+        }),
+    ))
 }
 
 /// Account sign in
@@ -185,18 +238,27 @@ pub async fn login(
         ));
     }
 
+    if username.len() > 30 || payload.password.len() > 128 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthError {
+                message: "Username or password is too long.".into(),
+            }),
+        ));
+    }
+
     // Case-insensitive username lookup
     let user = sqlx::query_as::<_, UserRecord>(
         r#"
         SELECT id, username, password_hash, role, created_at
         FROM users
-        WHERE LOWER(username) = LOWER(?)
-        "#
+        WHERE username COLLATE NOCASE = ?
+        "#,
     )
     .bind(username)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?;
+    .map_err(|e| internal_error("User lookup failed", e))?;
 
     let user = match user {
         Some(u) => u,
@@ -211,7 +273,12 @@ pub async fn login(
     };
 
     // Constant-time Argon2id password verification
-    let is_valid = verify_password(&payload.password, &user.password_hash)
+    let _hash_slot = acquire_password_hash_slot()?;
+    let password = payload.password;
+    let password_hash = user.password_hash.clone();
+    let is_valid = tokio::task::spawn_blocking(move || verify_password(&password, &password_hash))
+        .await
+        .map_err(|e| internal_error("Password verification task failed", e))?
         .unwrap_or(false);
 
     if !is_valid {
@@ -223,8 +290,14 @@ pub async fn login(
         ));
     }
 
-    let token = create_jwt(&user.id, &user.username, &user.role, &state.config.jwt_secret, 7 * 86400)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e })))?;
+    let token = create_jwt(
+        &user.id,
+        &user.username,
+        &user.role,
+        &state.config.jwt_secret,
+        7 * 86400,
+    )
+    .map_err(|e| internal_error("Session token creation failed", e))?;
 
     let user_dto = UserDto {
         id: user.id,
@@ -233,7 +306,13 @@ pub async fn login(
         created_at: user.created_at,
     };
 
-    Ok((StatusCode::OK, Json(AuthResponse { token, user: user_dto })))
+    Ok((
+        StatusCode::OK,
+        Json(AuthResponse {
+            token,
+            user: user_dto,
+        }),
+    ))
 }
 
 /// Returns authenticated session profile
@@ -245,33 +324,43 @@ pub async fn me(
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or_else(|| (
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthError {
+                    message: "Missing or invalid authorization header.".to_string(),
+                }),
+            )
+        })?;
+
+    let claims = verify_jwt(auth_header, &state.config.jwt_secret).map_err(|_| {
+        (
             StatusCode::UNAUTHORIZED,
             Json(AuthError {
-                message: "Missing or invalid authorization header.".to_string(),
+                message: "Invalid or expired authorization token.".into(),
             }),
-        ))?;
-
-    let claims = verify_jwt(auth_header, &state.config.jwt_secret)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, Json(AuthError { message: e })))?;
+        )
+    })?;
 
     let user = sqlx::query_as::<_, UserDto>(
         r#"
         SELECT id, username, role, created_at
         FROM users
         WHERE id = ?
-        "#
+        "#,
     )
     .bind(&claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(AuthError { message: e.to_string() })))?
-    .ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(AuthError {
-            message: "User account not found.".to_string(),
-        }),
-    ))?;
+    .map_err(|e| internal_error("Profile lookup failed", e))?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(AuthError {
+                message: "User account not found.".to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(user))
 }

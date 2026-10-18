@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use streamflow_backend::{
     db::init_db,
-    security::{create_jwt, hash_password, sign_stream_token, verify_jwt, verify_password, verify_stream_token},
+    security::{
+        create_jwt, hash_password, sign_stream_token, verify_jwt, verify_password,
+        verify_stream_token,
+    },
     stream::{SegmentData, StreamEngine},
 };
 
@@ -24,8 +27,8 @@ async fn test_jwt_generation_and_verification() {
     let username = "alex_dev";
     let role = "premium_user";
 
-    let token = create_jwt(user_id, username, role, secret, 3600)
-        .expect("JWT creation should succeed");
+    let token =
+        create_jwt(user_id, username, role, secret, 3600).expect("JWT creation should succeed");
 
     let claims = verify_jwt(&token, secret).expect("JWT verification should succeed");
     assert_eq!(claims.sub, user_id);
@@ -53,11 +56,21 @@ async fn test_hmac_sha256_stream_tokens() {
     assert!(verify_stream_token(uri, future_exp, &token, secret));
 
     // Tampered URI check
-    assert!(!verify_stream_token("https://cdn.streamflow.io/hls/1080p/segment_002.ts", future_exp, &token, secret));
+    assert!(!verify_stream_token(
+        "https://cdn.streamflow.io/hls/1080p/segment_002.ts",
+        future_exp,
+        &token,
+        secret
+    ));
 
     // Tampered signature check
     let tampered_token = format!("{}ff", &token[..token.len() - 2]);
-    assert!(!verify_stream_token(uri, future_exp, &tampered_token, secret));
+    assert!(!verify_stream_token(
+        uri,
+        future_exp,
+        &tampered_token,
+        secret
+    ));
 
     // Expired token check
     let past_exp = chrono::Utc::now().timestamp() as u64 - 10; // 10 secs in past
@@ -68,7 +81,9 @@ async fn test_hmac_sha256_stream_tokens() {
 #[tokio::test]
 async fn test_database_initialization_and_fts_search() {
     let db_url = "sqlite::memory:";
-    let pool = init_db(db_url).await.expect("In-memory SQLite initialization should succeed");
+    let pool = init_db(db_url)
+        .await
+        .expect("In-memory SQLite initialization should succeed");
 
     // Check seeded videos
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM videos")
@@ -84,7 +99,7 @@ async fn test_database_initialization_and_fts_search() {
         SELECT v.id, v.title FROM videos v
         JOIN fts_videos f ON v.id = f.video_id
         WHERE fts_videos MATCH ?
-        "#
+        "#,
     )
     .bind(fts_query)
     .fetch_all(&pool)
@@ -109,7 +124,9 @@ async fn test_manifest_rewriting_and_token_injection() {
 #[tokio::test]
 async fn test_multithreaded_concurrent_sqlite_writes() {
     let db_url = "sqlite::memory:";
-    let pool = init_db(db_url).await.expect("In-memory SQLite initialization should succeed");
+    let pool = init_db(db_url)
+        .await
+        .expect("In-memory SQLite initialization should succeed");
 
     // Seed test users
     for i in 0..5 {
@@ -144,7 +161,7 @@ async fn test_multithreaded_concurrent_sqlite_writes() {
                 ON CONFLICT(user_id, video_id) DO UPDATE SET
                     progress_secs = excluded.progress_secs,
                     updated_at = excluded.updated_at
-                "#
+                "#,
             )
             .bind(&user_id)
             .bind(video_id)
@@ -182,7 +199,7 @@ async fn test_multithreaded_concurrent_sqlite_writes() {
                 ON CONFLICT(user_id, video_id) DO UPDATE SET
                     rating = excluded.rating,
                     created_at = excluded.created_at
-                "#
+                "#,
             )
             .bind(&user_id)
             .bind(video_id)
@@ -337,7 +354,12 @@ async fn test_token_tampering_and_boundary_conditions() {
     }
 
     // 3. Invalid non-hex string must not panic and must return false
-    assert!(!verify_stream_token(uri, future_exp, "invalid_non_hex_token!@#$%", secret));
+    assert!(!verify_stream_token(
+        uri,
+        future_exp,
+        "invalid_non_hex_token!@#$%",
+        secret
+    ));
     assert!(!verify_stream_token(uri, future_exp, "", secret));
 
     // 4. Expiration boundaries

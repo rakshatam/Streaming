@@ -1,4 +1,9 @@
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 
@@ -38,7 +43,25 @@ pub async fn health_check() -> impl IntoResponse {
     })
 }
 
-pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn clear_cache(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, StatusCode> {
+    let configured_token = state
+        .config
+        .cache_admin_token
+        .as_deref()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let supplied_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if !constant_time_eq(configured_token.as_bytes(), supplied_token.as_bytes()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     state.stream_engine.clear_cache().await;
     state.stream_engine.reset_cache_counters();
     let now = std::time::SystemTime::now()
@@ -46,11 +69,25 @@ pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
         .unwrap_or_default()
         .as_secs();
 
-    Json(ClearCacheResponse {
+    Ok(Json(ClearCacheResponse {
         success: true,
         message: "In-memory segment and manifest cache cleared successfully",
         cleared_at_unix: now,
-    })
+    }))
+}
+
+fn constant_time_eq(expected: &[u8], supplied: &[u8]) -> bool {
+    if expected.len() != supplied.len() {
+        return false;
+    }
+
+    expected
+        .iter()
+        .zip(supplied)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 pub async fn get_metrics(State(state): State<AppState>) -> impl IntoResponse {
@@ -63,8 +100,6 @@ pub async fn get_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let total_cache_lookups = hits + misses;
     let ratio = if total_cache_lookups > 0 {
         (hits as f64 / total_cache_lookups as f64) * 100.0
-    } else if reqs > 0 {
-        (hits as f64 / reqs as f64) * 100.0
     } else {
         0.0
     };

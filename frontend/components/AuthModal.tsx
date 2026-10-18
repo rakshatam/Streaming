@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Lock, User, ShieldCheck, ArrowRight, CheckCircle2, UserPlus } from 'lucide-react';
+import { X, Lock, User, ArrowRight, CheckCircle2, UserPlus } from 'lucide-react';
 import { User as UserType } from '../types';
 import { apiUrl } from '../lib/api';
 
@@ -9,6 +9,23 @@ interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: (user: UserType, token: string) => void;
+}
+
+interface AuthApiResponse {
+  token?: string;
+  user?: UserType;
+  message?: string;
+}
+
+async function readAuthResponse(response: Response): Promise<AuthApiResponse> {
+  const body = await response.text();
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === 'object' && parsed !== null) return parsed as AuthApiResponse;
+  } catch {
+    // Axum's plain-text extractor errors are shown as a readable message below.
+  }
+  return { message: body };
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
@@ -26,6 +43,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
     };
   }, []);
+
+  const closeModal = () => {
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = null;
+    }
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -46,8 +71,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       return;
     }
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long.');
+    const passwordBytes = new TextEncoder().encode(password).length;
+    if (passwordBytes < 8 || passwordBytes > 128) {
+      setError('Password must be between 8 and 128 bytes long.');
       return;
     }
 
@@ -65,27 +91,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         body: JSON.stringify({ username: cleanUsername, password }),
       });
 
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { message: text };
-      }
+      const data = await readAuthResponse(res);
 
       if (!res.ok) {
         throw new Error(data.message || 'Registration failed');
       }
+      if (!data.token || !data.user) throw new Error('Registration returned an invalid session.');
 
-      localStorage.setItem('streamflow_token', data.token);
-      setSuccessMsg(`Welcome, ${data.user.username}! Account created securely.`);
+      const { token, user } = data as { token: string; user: UserType };
+      localStorage.setItem('streamflow_token', token);
+      setSuccessMsg(`Welcome, ${user.username}! Account created securely.`);
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
       successTimeoutRef.current = setTimeout(() => {
-        onSuccess(data.user, data.token);
-        onClose();
+        onSuccess(user, token);
+        closeModal();
       }, 600);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Registration failed');
     } finally {
       setIsLoading(false);
     }
@@ -95,6 +117,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (new TextEncoder().encode(password).length > 128) {
+      setError('Password cannot exceed 128 bytes.');
+      return;
+    }
     setIsLoading(true);
 
     try {
@@ -104,23 +130,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         body: JSON.stringify({ username: username.trim(), password }),
       });
 
-      const text = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { message: text };
-      }
+      const data = await readAuthResponse(res);
 
       if (!res.ok) {
         throw new Error(data.message || 'Invalid username or password');
       }
+      if (!data.token || !data.user) throw new Error('Sign in returned an invalid session.');
 
-      localStorage.setItem('streamflow_token', data.token);
-      onSuccess(data.user, data.token);
+      const { token, user } = data as { token: string; user: UserType };
+      localStorage.setItem('streamflow_token', token);
+      onSuccess(user, token);
       onClose();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Sign in failed');
     } finally {
       setIsLoading(false);
     }
@@ -136,9 +158,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md rounded-3xl bg-[#0e0e16] border border-white/10 p-6 sm:p-8 shadow-2xl space-y-6">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-dialog-title"
+        className="relative w-full max-w-md rounded-3xl bg-[#0e0e16] border border-white/10 p-6 sm:p-8 shadow-2xl space-y-6"
+      >
         <button
-          onClick={onClose}
+          type="button"
+          onClick={closeModal}
+          aria-label="Close sign-in dialog"
           className="absolute top-5 right-5 p-2 rounded-full text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 transition-colors"
         >
           <X className="w-4 h-4" />
@@ -146,7 +175,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
         {/* Header */}
         <div className="space-y-1">
-          <h3 className="text-2xl font-bold text-white tracking-tight">
+          <h3 id="auth-dialog-title" className="text-2xl font-bold text-white tracking-tight">
             {isRegister ? 'Create Account' : 'Sign In'}
           </h3>
           <p className="text-xs text-slate-400">
@@ -179,13 +208,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         </div>
 
         {error && (
-          <div className="p-3.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium">
+          <div role="alert" className="p-3.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium">
             {error}
           </div>
         )}
 
         {successMsg && (
-          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center gap-2">
+          <div role="status" className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             <span>{successMsg}</span>
           </div>
@@ -195,12 +224,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         {!isRegister ? (
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Username</label>
+              <label htmlFor="login-username" className="text-xs font-semibold text-slate-300">Username</label>
               <div className="relative flex items-center">
                 <User className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="text"
+                  id="login-username"
                   required
+                  maxLength={30}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Enter your username"
@@ -210,12 +241,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Password</label>
+              <label htmlFor="login-password" className="text-xs font-semibold text-slate-300">Password</label>
               <div className="relative flex items-center">
                 <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="password"
+                  id="login-password"
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -237,11 +270,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           /* Create Account Form (Pure Username + Password) */
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Choose Username</label>
+              <label htmlFor="register-username" className="text-xs font-semibold text-slate-300">Choose Username</label>
               <div className="relative flex items-center">
                 <User className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="text"
+                  id="register-username"
                   required
                   minLength={3}
                   maxLength={30}
@@ -255,33 +289,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Set Password</label>
+              <label htmlFor="register-password" className="text-xs font-semibold text-slate-300">Set Password</label>
               <div className="relative flex items-center">
                 <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="password"
+                  id="register-password"
                   required
                   minLength={8}
                   maxLength={128}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  placeholder="8–128 bytes"
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Confirm Password</label>
+              <label htmlFor="confirm-password" className="text-xs font-semibold text-slate-300">Confirm Password</label>
               <div className="relative flex items-center">
                 <Lock className="absolute left-3 w-4 h-4 text-slate-500" />
                 <input
                   type="password"
+                  id="confirm-password"
                   required
                   minLength={8}
                   maxLength={128}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
                   placeholder="Repeat your password"
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-red-500 transition-colors"
                 />
@@ -310,7 +348,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
               : "Don't have an account yet? Create one in seconds"}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 };

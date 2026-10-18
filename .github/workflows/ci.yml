@@ -29,6 +29,10 @@ jobs:
         with:
           workspaces: backend -> target
 
+      - name: Check Rust Formatting
+        working-directory: backend
+        run: cargo fmt --all -- --check
+
       - name: Verify Backend Compilation
         working-directory: backend
         run: cargo check --verbose
@@ -55,6 +59,10 @@ jobs:
       - name: Install Dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Typecheck Frontend
+        working-directory: frontend
+        run: npm run typecheck
 
       - name: Build Next.js Production Bundle
         working-directory: frontend
@@ -87,6 +95,9 @@ jobs:
         run: cargo build --release
 
       - name: Launch StreamFlow Edge Server
+        env:
+          HMAC_SECRET: ci-streamflow-hmac-secret-32-bytes-minimum
+          JWT_SECRET: ci-streamflow-jwt-secret-is-also-32-bytes
         run: |
           ./backend/target/release/streamflow-backend &
           echo $! > server.pid

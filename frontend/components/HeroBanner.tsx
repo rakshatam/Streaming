@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Play, Info, Shield, Radio, Sparkles } from 'lucide-react';
+import { Play, Radio, Sparkles } from 'lucide-react';
 import { Video } from '../types';
 
 interface HeroBannerProps {
@@ -75,13 +75,6 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ video, onPlay }) => {
               <span>Watch Now</span>
             </button>
 
-            <button
-              onClick={() => onPlay(video)}
-              className="flex items-center space-x-2.5 px-5 py-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm backdrop-blur-md border border-white/10 transition-all hover:border-white/20"
-            >
-              <Info className="w-4 h-4 text-slate-300" />
-              <span>Details</span>
-            </button>
           </div>
         </div>
       </div>

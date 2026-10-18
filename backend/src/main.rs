@@ -1,21 +1,13 @@
 use axum::http::{header, Method};
 use std::sync::Arc;
 use tower_http::{
-    compression::CompressionLayer,
-    cors::{Any, CorsLayer},
-    set_header::SetResponseHeaderLayer,
+    compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use streamflow_backend::{
-    api,
-    config::Config,
-    db,
-    stream::StreamEngine,
-    AppState,
-};
+use streamflow_backend::{api, config::Config, db, stream::StreamEngine, AppState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting StreamFlow video server...");
 
-    let config = Arc::new(Config::from_env());
+    let config = Arc::new(Config::from_env()?);
 
     // Initialize SQLite database
     let db = db::init_db(&config.database_url).await?;
@@ -48,9 +40,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream_engine,
     };
 
-    // CORS configuration
+    // Restrict browser access to the explicitly configured frontend origins.
+    let allowed_origins = config
+        .cors_allowed_origins
+        .iter()
+        .map(|origin| origin.parse::<header::HeaderValue>())
+        .collect::<Result<Vec<_>, _>>()?;
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(allowed_origins)
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -77,7 +74,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = api::create_router()
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        // Stream signatures are query parameters; log only the path so signed
+        // URLs do not end up in request logs.
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %request.uri().path()
+                )
+            }),
+        )
         // Standard security headers
         .layer(SetResponseHeaderLayer::overriding(
             header::HeaderName::from_static("x-content-type-options"),
@@ -93,7 +100,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_state(state);
 
-    let bind_addr = format!("{}:{}", config.server_host, config.server_port);
+    let host = if config.server_host.contains(':') && !config.server_host.starts_with('[') {
+        format!("[{}]", config.server_host)
+    } else {
+        config.server_host.clone()
+    };
+    let bind_addr = format!("{}:{}", host, config.server_port);
     info!("StreamFlow API server listening on http://{}", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

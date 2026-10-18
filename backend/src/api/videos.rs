@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::{security::verify_jwt, AppState};
 
@@ -61,6 +62,27 @@ pub struct VideoActionError {
     pub message: String,
 }
 
+fn database_error(error_value: sqlx::Error) -> (StatusCode, String) {
+    error!("Video API database operation failed: {}", error_value);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".into(),
+    )
+}
+
+fn action_database_error(error_value: sqlx::Error) -> (StatusCode, Json<VideoActionError>) {
+    error!(
+        "Video interaction database operation failed: {}",
+        error_value
+    );
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(VideoActionError {
+            message: "Internal server error".into(),
+        }),
+    )
+}
+
 fn try_extract_user_id(headers: &HeaderMap, jwt_secret: &str) -> Option<String> {
     headers
         .get("Authorization")
@@ -105,10 +127,7 @@ pub async fn list_videos(
 
     q = q.bind(limit).bind(offset);
 
-    let videos = q
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let videos = q.fetch_all(&state.db).await.map_err(database_error)?;
 
     Ok(Json(videos))
 }
@@ -117,14 +136,12 @@ pub async fn get_video(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let video = sqlx::query_as::<_, Video>(
-        "SELECT * FROM videos WHERE id = ?"
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, "Video not found".to_string()))?;
+    let video = sqlx::query_as::<_, Video>("SELECT * FROM videos WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(database_error)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Video not found".to_string()))?;
 
     Ok(Json(video))
 }
@@ -137,6 +154,9 @@ pub async fn search_videos(
     if search_term.is_empty() {
         return Ok(Json(Vec::<Video>::new()));
     }
+    if search_term.len() > 100 {
+        return Err((StatusCode::BAD_REQUEST, "Search query is too long".into()));
+    }
 
     // Format valid FTS5 query (e.g. "space*" for prefix matching)
     let sanitized = search_term.replace('"', "").replace('*', "");
@@ -148,7 +168,7 @@ pub async fn search_videos(
         WHERE fts_videos MATCH ?
         ORDER BY rank
         LIMIT 30
-        "#
+        "#,
     )
     .bind(&fts_query)
     .fetch_all(&state.db)
@@ -165,7 +185,7 @@ pub async fn search_videos(
                 WHERE title LIKE ? OR description LIKE ? OR category LIKE ? OR tags LIKE ?
                 ORDER BY rating DESC
                 LIMIT 30
-                "#
+                "#,
             )
             .bind(&like_term)
             .bind(&like_term)
@@ -173,7 +193,7 @@ pub async fn search_videos(
             .bind(&like_term)
             .fetch_all(&state.db)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(database_error)?;
 
             Ok(Json(fallback_results))
         }
@@ -190,11 +210,11 @@ pub async fn get_categories(
     }
 
     let categories = sqlx::query_as::<_, CategoryCount>(
-        "SELECT category, COUNT(*) as count FROM videos GROUP BY category ORDER BY count DESC"
+        "SELECT category, COUNT(*) as count FROM videos GROUP BY category ORDER BY count DESC",
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(database_error)?;
 
     Ok(Json(categories))
 }
@@ -207,50 +227,57 @@ pub async fn get_interactions(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let user_id = try_extract_user_id(&headers, &state.config.jwt_secret);
 
-    let (likes_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM video_likes WHERE video_id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
-
-    let has_liked = if let Some(ref uid) = user_id {
-        let exists: Option<(String,)> = sqlx::query_as(
-            "SELECT video_id FROM video_likes WHERE user_id = ? AND video_id = ?"
-        )
-        .bind(uid)
+    let video_rating: Option<(f64,)> = sqlx::query_as("SELECT rating FROM videos WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
-        .unwrap_or(None);
+        .map_err(database_error)?;
+    let Some((catalog_rating,)) = video_rating else {
+        return Err((StatusCode::NOT_FOUND, "Video not found".into()));
+    };
+
+    let (likes_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM video_likes WHERE video_id = ?")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(database_error)?;
+
+    let has_liked = if let Some(ref uid) = user_id {
+        let exists: Option<(String,)> =
+            sqlx::query_as("SELECT video_id FROM video_likes WHERE user_id = ? AND video_id = ?")
+                .bind(uid)
+                .bind(&id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(database_error)?;
         exists.is_some()
     } else {
         false
     };
 
     let user_rating: Option<i64> = if let Some(ref uid) = user_id {
-        let r: Option<(i64,)> = sqlx::query_as(
-            "SELECT rating FROM video_ratings WHERE user_id = ? AND video_id = ?"
-        )
-        .bind(uid)
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await
-        .unwrap_or(None);
+        let r: Option<(i64,)> =
+            sqlx::query_as("SELECT rating FROM video_ratings WHERE user_id = ? AND video_id = ?")
+                .bind(uid)
+                .bind(&id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(database_error)?;
         r.map(|(val,)| val)
     } else {
         None
     };
 
-    let rating_stats: (i64, Option<f64>) = sqlx::query_as(
-        "SELECT COUNT(*), AVG(rating) FROM video_ratings WHERE video_id = ?"
-    )
-    .bind(&id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or((0, None));
+    let rating_stats: (i64, Option<f64>) =
+        sqlx::query_as("SELECT COUNT(*), AVG(rating) FROM video_ratings WHERE video_id = ?")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(database_error)?;
 
     let total_ratings = rating_stats.0;
-    let avg_rating = rating_stats.1.unwrap_or(4.8);
+    let avg_rating = rating_stats.1.unwrap_or(catalog_rating);
 
     Ok(Json(VideoInteractionsResponse {
         video_id: id,
@@ -277,33 +304,50 @@ pub async fn toggle_like(
         )
     })?;
 
-    let deleted = sqlx::query("DELETE FROM video_likes WHERE user_id = ? AND video_id = ?")
-        .bind(&user_id)
+    let video_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM videos WHERE id = ?")
         .bind(&id)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?
-        .rows_affected();
+        .map_err(action_database_error)?;
+    if video_exists.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(VideoActionError {
+                message: "Video not found".into(),
+            }),
+        ));
+    }
 
-    let has_liked = if deleted > 0 {
-        false
+    let now = chrono::Utc::now().timestamp();
+    let inserted = sqlx::query(
+        "INSERT OR IGNORE INTO video_likes (user_id, video_id, created_at) VALUES (?, ?, ?)",
+    )
+    .bind(&user_id)
+    .bind(&id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .map_err(action_database_error)?
+    .rows_affected();
+
+    let has_liked = if inserted > 0 {
+        true
     } else {
-        let now = chrono::Utc::now().timestamp();
-        let _ = sqlx::query("INSERT OR IGNORE INTO video_likes (user_id, video_id, created_at) VALUES (?, ?, ?)")
+        sqlx::query("DELETE FROM video_likes WHERE user_id = ? AND video_id = ?")
             .bind(&user_id)
             .bind(&id)
-            .bind(now)
             .execute(&state.db)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?;
-        true
+            .map_err(action_database_error)?;
+        false
     };
 
-    let (likes_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM video_likes WHERE video_id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
+    let (likes_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM video_likes WHERE video_id = ?")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(action_database_error)?;
 
     Ok(Json(serde_json::json!({
         "video_id": id,
@@ -328,6 +372,20 @@ pub async fn rate_video(
         )
     })?;
 
+    let video_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM videos WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(action_database_error)?;
+    if video_exists.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(VideoActionError {
+                message: "Video not found".into(),
+            }),
+        ));
+    }
+
     if payload.rating < 1 || payload.rating > 5 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -338,6 +396,7 @@ pub async fn rate_video(
     }
 
     let now = chrono::Utc::now().timestamp();
+    let mut transaction = state.db.begin().await.map_err(action_database_error)?;
     sqlx::query(
         r#"
         INSERT INTO video_ratings (user_id, video_id, rating, created_at)
@@ -345,35 +404,36 @@ pub async fn rate_video(
         ON CONFLICT(user_id, video_id) DO UPDATE SET
             rating = excluded.rating,
             created_at = excluded.created_at
-        "#
+        "#,
     )
     .bind(&user_id)
     .bind(&id)
     .bind(payload.rating)
     .bind(now)
-    .execute(&state.db)
+    .execute(&mut *transaction)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(VideoActionError { message: e.to_string() })))?;
+    .map_err(action_database_error)?;
 
     // Recalculate average rating for the video
-    let stats: (i64, Option<f64>) = sqlx::query_as(
-        "SELECT COUNT(*), AVG(rating) FROM video_ratings WHERE video_id = ?"
-    )
-    .bind(&id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or((0, None));
+    let stats: (i64, Option<f64>) =
+        sqlx::query_as("SELECT COUNT(*), AVG(rating) FROM video_ratings WHERE video_id = ?")
+            .bind(&id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(action_database_error)?;
 
     let total = stats.0;
     let avg = stats.1.unwrap_or(payload.rating as f64);
     let rounded_avg = (avg * 10.0).round() / 10.0;
 
-    // Update videos table rating column
-    let _ = sqlx::query("UPDATE videos SET rating = ? WHERE id = ?")
+    // Keep the catalog aggregate consistent with the user ratings.
+    sqlx::query("UPDATE videos SET rating = ? WHERE id = ?")
         .bind(rounded_avg)
         .bind(&id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut *transaction)
+        .await
+        .map_err(action_database_error)?;
+    transaction.commit().await.map_err(action_database_error)?;
 
     Ok(Json(serde_json::json!({
         "video_id": id,

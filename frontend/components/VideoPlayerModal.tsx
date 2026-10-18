@@ -10,7 +10,6 @@ import {
   Maximize,
   Minimize,
   Settings,
-  Shield,
   Activity,
   X,
   Radio,
@@ -18,7 +17,6 @@ import {
   Check,
   Heart,
   Star,
-  Trash2,
   AlertCircle,
   RotateCcw,
 } from 'lucide-react';
@@ -37,25 +35,21 @@ function formatQualityLabel(width?: number, height?: number): string {
   const w = width || 0;
   const h = height || 0;
 
-  // 4K (standard 3840x2160 or cinematic widescreen >=3200x1350)
-  if (w >= 3200 || h >= 2000) return '4K';
-
-  // 1440p (standard 2560x1440 or widescreen 2560x1080 / 2576x1150)
-  if (w >= 2500 || h >= 1400 || (h > 1080 && w >= 2000)) return '1440p';
-
-  // 1080p (standard 1920x1080 or widescreen 1920x800 / 1680x750)
-  if (w >= 1600 || h >= 1000 || (w >= 1600 && h >= 720)) return '1080p';
-
-  // 720p (standard 1280x720 or widescreen 1280x544)
-  if (w >= 1200 || h >= 700) return '720p';
-
-  // 480p
-  if (h >= 480) return '480p';
-
-  // 360p
-  if (h >= 360) return '360p';
+  // Use encoded height so ultrawide 1080p streams are not mistaken for 1440p.
+  if (h >= 2000) return '4K';
+  if (h >= 1400) return '1440p';
+  if (h >= 1000) return '1080p';
+  if (h >= 680) return '720p';
+  if (h >= 460) return '480p';
+  if (h >= 340) return '360p';
 
   if (h > 0) return `${h}p`;
+
+  // Some manifests omit the height; use width only in that case.
+  if (w >= 3800) return '4K';
+  if (w >= 2500) return '1440p';
+  if (w >= 1900) return '1080p';
+  if (w >= 1200) return '720p';
 
   return '1080p';
 }
@@ -133,10 +127,17 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   // Fetch initial interactions (likes & ratings)
   useEffect(() => {
     if (!video) return;
+    const controller = new AbortController();
     const token = localStorage.getItem('streamflow_token');
     const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
-    fetch(apiUrl(`/api/videos/${video.id}/interactions`), { headers })
+    setLikesCount(0);
+    setHasLiked(false);
+    setUserRating(null);
+    setAvgRating(video.rating);
+    setTotalRatings(0);
+
+    fetch(apiUrl(`/api/videos/${video.id}/interactions`), { headers, signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) {
@@ -148,7 +149,9 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         }
       })
       .catch(() => {});
-  }, [video]);
+
+    return () => controller.abort();
+  }, [video?.id, video?.rating]);
 
   // Handle Like Toggle
   const handleToggleLike = async () => {
@@ -209,27 +212,19 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     }
   };
 
-  const [clearingCache, setClearingCache] = useState(false);
-  const handleClearCache = async () => {
-    setClearingCache(true);
-    try {
-      const res = await fetch(apiUrl('/api/cache/clear'), { method: 'POST' });
-      if (res.ok) {
-        setInteractionToast('Stream cache cleared successfully');
-      } else {
-        setInteractionToast('Failed to clear cache');
-      }
-    } catch {
-      setInteractionToast('Cache clear failed');
-    } finally {
-      setClearingCache(false);
-      setTimeout(() => setInteractionToast(null), 2500);
-    }
-  };
-
   // Initialize Hls.js & Load Rewritten Stream from Rust Backend
   useEffect(() => {
     if (!video || !videoRef.current) return;
+
+    setPlaybackError(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setBuffered(0);
+    setQualities([]);
+    setSelectedQuality(-1);
+    setCurrentQualityLabel('Auto');
+    setShowControls(true);
 
     const streamManifestUrl = apiUrl(`/api/stream/manifest/${video.id}`);
     const videoEl = videoRef.current;
@@ -305,6 +300,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       // Native HLS (Safari/iOS)
       videoEl.src = streamManifestUrl;
       videoEl.play().catch(() => {});
+    } else {
+      setPlaybackError('This browser does not support HLS playback.');
     }
 
     return () => {
@@ -312,6 +309,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
+      videoEl.pause();
     };
   }, [video, retryCount]);
 
@@ -320,7 +318,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     if (!videoRef.current) return;
     const v = videoRef.current;
     setCurrentTime(v.currentTime);
-    setDuration(v.duration || 0);
+    setDuration(Number.isFinite(v.duration) ? v.duration : 0);
 
     // Calculate buffer ahead
     if (v.buffered.length > 0) {
@@ -341,20 +339,21 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
-      videoRef.current.play();
-      setIsPlaying(true);
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false));
     } else {
       videoRef.current.pause();
       setIsPlaying(false);
     }
   }, []);
 
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     if (!videoRef.current) return;
     const nextMuted = !isMuted;
     videoRef.current.muted = nextMuted;
     setIsMuted(nextMuted);
-  };
+  }, [isMuted]);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
@@ -375,16 +374,22 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
     }
   };
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
     } else {
       document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
 
   const handleQualityChange = (levelIndex: number) => {
     if (!hlsRef.current) return;
@@ -408,8 +413,14 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
 
   // Keyboard Navigation
   useEffect(() => {
+    if (!video) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      const target = e.target;
+      const isInteractiveTarget = target instanceof HTMLElement
+        && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName));
+      if (isInteractiveTarget && e.key !== 'Escape') return;
+
       switch (e.key) {
         case ' ':
           e.preventDefault();
@@ -428,27 +439,33 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
           setShowDiagnostics((prev) => !prev);
           break;
         case 'Escape':
-          if (isFullscreen) {
+          if (document.fullscreenElement === containerRef.current) {
             document.exitFullscreen().catch(() => {});
           } else {
             onClose();
           }
           break;
         case 'ArrowLeft':
-          if (videoRef.current) videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
+          if (videoRef.current) {
+            e.preventDefault();
+            videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
+          }
           break;
         case 'ArrowRight':
-          if (videoRef.current) videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 10);
+          if (videoRef.current) {
+            e.preventDefault();
+            videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 10);
+          }
           break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, isFullscreen, duration, onClose]);
+  }, [video, togglePlay, toggleMute, toggleFullscreen, duration, onClose]);
 
   const formatTime = (seconds: number) => {
-    if (isNaN(seconds) || seconds < 0) return '00:00';
+    if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
@@ -457,7 +474,12 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
   if (!video) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-200">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Video player: ${video.title}`}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-200"
+    >
       <div
         ref={containerRef}
         onMouseMove={handleMouseMove}
@@ -473,6 +495,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
         {/* Video Element */}
         <video
           ref={videoRef}
+          aria-label={video.title}
           onTimeUpdate={handleTimeUpdate}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
@@ -598,22 +621,6 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
               <span>Delivery:</span>
               <span className="text-indigo-400 font-semibold">Proxy</span>
             </div>
-            <div className="flex justify-between">
-              <span>Token:</span>
-              <span className="text-emerald-400 font-semibold">Verified</span>
-            </div>
-            <div className="flex justify-between items-center pt-2 border-t border-white/10">
-              <span className="text-slate-400">Stream Cache:</span>
-              <button
-                onClick={handleClearCache}
-                disabled={clearingCache}
-                className="px-2 py-1 bg-white/10 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 rounded-md border border-white/10 text-[10px] font-sans flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50"
-                title="Purge in-memory segment cache"
-              >
-                <Trash2 className={`w-3 h-3 ${clearingCache ? 'animate-spin text-rose-400' : ''}`} />
-                <span>{clearingCache ? 'Purging...' : 'Clear Cache'}</span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -639,14 +646,16 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
 
         {/* Center Play Button Overlay When Paused */}
         {!isPlaying && !playbackError && (
-          <div
+          <button
+            type="button"
             onClick={togglePlay}
+            aria-label="Play video"
             className="absolute inset-0 flex items-center justify-center cursor-pointer pointer-events-auto"
           >
             <div className="w-20 h-20 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-2xl shadow-red-600/50 hover:scale-110 transition-transform">
               <Play className="w-9 h-9 fill-current ml-1" />
             </div>
-          </div>
+          </button>
         )}
 
         {/* Bottom Custom Playback Bar Overlay */}
